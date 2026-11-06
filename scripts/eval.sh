@@ -65,7 +65,8 @@ python tools/run_distributed_eval.py \
   --output-dir "${OUTPUT_DIR}" \
   --agent "${AGENT}" \
   --agent-config "$(realpath "${CHECKPOINT}")" \
-  --gpu-ids "${GPU_IDS}"
+  --gpu-ids "${GPU_IDS}" \
+  --base-tm-port 8000
 
 if [[ "${BENCHMARK}" == carla_f ]]; then
   python benchmark/metrics/carla_f_metrics.py "${OUTPUT_DIR}" --routes-dir "${ROUTES_DIR}"
