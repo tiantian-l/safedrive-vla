@@ -11,7 +11,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=00:30:00
+#SBATCH --time=01:00:00
 #SBATCH --partition=dev-a100-80
 #SBATCH --account=eehpc-dev-2026d07-102g
 #SBATCH --output=slurm-carla-smoke-%j.out
@@ -24,7 +24,7 @@ export ENV_NAME="${ENV_NAME:-safedrive}"
 PY="${CONDA_ROOT}/envs/${ENV_NAME}/bin/python"
 PORT="${PORT:-2000}"
 LOAD_TOWN="${LOAD_TOWN:-Town12}"
-export PYTHONNOUSERSITE=1
+export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1
 
 step() { echo; echo "========== $* =========="; }
 
@@ -45,56 +45,94 @@ step "4. Python environment"
 
 step "5. Start CARLA headless on port $PORT"
 test -x "$CARLA_ROOT/CarlaUE4.sh" || { echo "FATAL: $CARLA_ROOT/CarlaUE4.sh not found"; exit 1; }
-"$CARLA_ROOT/CarlaUE4.sh" -RenderOffScreen -nosound -carla-rpc-port="$PORT" -graphicsadapter=0 > carla_smoke_server_${SLURM_JOB_ID}.log 2>&1 &
+JOB="${SLURM_JOB_ID:-local}"
+SERVER_LOG="carla_smoke_server_${JOB}.log"
+GPU_LOG="carla_smoke_gpu_${JOB}.csv"
+# GPU utilisation / memory every 15 s: shows whether CARLA is rendering at all.
+nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv -l 15 > "$GPU_LOG" 2>&1 &
+MON_PID=$!
+"$CARLA_ROOT/CarlaUE4.sh" -RenderOffScreen -nosound -carla-rpc-port="$PORT" -graphicsadapter=0 > "$SERVER_LOG" 2>&1 &
 CARLA_PID=$!
-trap 'kill -- -$CARLA_PID 2>/dev/null; pkill -f "carla-rpc-port=$PORT" 2>/dev/null' EXIT
-sleep 20
-if ! kill -0 "$CARLA_PID" 2>/dev/null; then
-  echo "FATAL: CARLA exited during start-up. Last lines of its log:"; tail -50 carla_smoke_server_${SLURM_JOB_ID}.log; exit 1
-fi
+cleanup() {
+  step "Server log (last 40 lines)"; tail -40 "$SERVER_LOG"
+  step "GPU monitor"; cat "$GPU_LOG"
+  kill "$MON_PID" 2>/dev/null
+  kill -- -"$CARLA_PID" 2>/dev/null; pkill -f "carla-rpc-port=$PORT" 2>/dev/null
+}
+trap cleanup EXIT
+for i in $(seq 1 24); do
+  if ! kill -0 "$CARLA_PID" 2>/dev/null; then echo "FATAL: CARLA exited during start-up"; exit 1; fi
+  if (echo > /dev/tcp/127.0.0.1/"$PORT") 2>/dev/null; then echo "[$(date +%T)] CARLA is listening on port $PORT after $((i * 5)) s"; break; fi
+  sleep 5
+done
+(echo > /dev/tcp/127.0.0.1/"$PORT") 2>/dev/null || { echo "FATAL: CARLA not listening on port $PORT after 120 s"; exit 1; }
 
-step "6. Python client: connect, load $LOAD_TOWN, run 100 synchronous ticks"
-"$PY" - "$PORT" "$LOAD_TOWN" <<'PYEOF'
+step "6. Python client: default map + camera first, then $LOAD_TOWN"
+timeout 2700 "$PY" -u - "$PORT" "$LOAD_TOWN" <<'PYEOF'
 import sys, time
 import carla
+T0 = time.time()
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')} +{time.time() - T0:5.0f}s] {msg}", flush=True)
+
+def drive(world, ticks, label):
+    """Ego vehicle + front camera in synchronous mode; returns camera frames received."""
+    settings = world.get_settings()
+    settings.synchronous_mode, settings.fixed_delta_seconds = True, 0.05
+    world.apply_settings(settings)
+    lib = world.get_blueprint_library()
+    ego = world.spawn_actor(lib.find("vehicle.lincoln.mkz_2020"), world.get_map().get_spawn_points()[0])
+    cam_bp = lib.find("sensor.camera.rgb")
+    cam_bp.set_attribute("image_size_x", "1024"); cam_bp.set_attribute("image_size_y", "512")
+    cam = world.spawn_actor(cam_bp, carla.Transform(carla.Location(x=-1.5, z=2.0)), attach_to=ego)
+    frames = []
+    cam.listen(lambda img: frames.append(img.frame))
+    log(f"{label}: ego + camera spawned, ticking")
+    t0 = time.time()
+    for k in range(ticks):
+        world.tick()
+        if k in (0, 9) or (k + 1) % 50 == 0:
+            log(f"{label}: tick {k + 1}/{ticks}, camera frames {len(frames)}")
+    dt = time.time() - t0
+    log(f"{label}: {ticks} ticks in {dt:.1f}s ({ticks / dt:.1f} ticks/s), camera frames {len(frames)}")
+    cam.stop(); cam.destroy(); ego.destroy()
+    settings.synchronous_mode = False
+    world.apply_settings(settings)
+    return len(frames)
+
 port, town = int(sys.argv[1]), sys.argv[2]
-client = carla.Client("localhost", port)
-client.set_timeout(300.0)
-t0 = time.time()
-for attempt in range(12):
+client = carla.Client("127.0.0.1", port)
+client.set_timeout(20.0)
+for attempt in range(1, 16):
     try:
-        world = client.get_world(); break
+        world = client.get_world()
+        break
     except RuntimeError as e:
-        print(f"waiting for server ({e})"); time.sleep(10)
+        log(f"connect attempt {attempt} failed: {e}")
+        time.sleep(5)
 else:
-    sys.exit("FATAL: could not connect to CARLA")
-print(f"connected after {time.time()-t0:.0f}s, server {client.get_server_version()}, map {world.get_map().name}")
+    log("FATAL: could not connect to CARLA"); sys.exit(1)
+log(f"connected: server {client.get_server_version()}, map {world.get_map().name}")
+
+client.set_timeout(120.0)
+ok_small = drive(world, 100, "A default map") > 0
+log("A default map: " + ("rendering OK" if ok_small else "FATAL: no camera frames, rendering is broken"))
+if not ok_small:
+    sys.exit(1)
+
 if town.lower() != "none":
+    client.set_timeout(1800.0)
+    log(f"B loading {town} (large map, can take many minutes) ...")
     t0 = time.time()
     world = client.load_world(town)
-    print(f"loaded {world.get_map().name} in {time.time()-t0:.0f}s")
-settings = world.get_settings()
-settings.synchronous_mode, settings.fixed_delta_seconds = True, 0.05
-world.apply_settings(settings)
-bp = world.get_blueprint_library().find("vehicle.lincoln.mkz_2020")
-spawn = world.get_map().get_spawn_points()[0]
-ego = world.spawn_actor(bp, spawn)
-cam_bp = world.get_blueprint_library().find("sensor.camera.rgb")
-cam_bp.set_attribute("image_size_x", "1024"); cam_bp.set_attribute("image_size_y", "512")
-frames = []
-cam = world.spawn_actor(cam_bp, carla.Transform(carla.Location(x=-1.5, z=2.0)), attach_to=ego)
-cam.listen(lambda img: frames.append(img.frame))
-t0 = time.time()
-for _ in range(100):
-    world.tick()
-dt = time.time() - t0
-print(f"100 ticks in {dt:.1f}s ({100/dt:.1f} ticks/s), camera frames received: {len(frames)}")
-cam.destroy(); ego.destroy()
-settings.synchronous_mode = False
-world.apply_settings(settings)
-print("SMOKE TEST PASSED" if frames else "FATAL: no camera frames (rendering is broken)")
+    log(f"B loaded {world.get_map().name} in {time.time() - t0:.0f}s")
+    client.set_timeout(120.0)
+    if drive(world, 50, f"B {town}") == 0:
+        log(f"FATAL: no camera frames on {town}"); sys.exit(1)
+log("SMOKE TEST PASSED")
 PYEOF
+echo "python exit code: $?"
 
-step "7. GPU memory used by CARLA"
+step "7. GPU memory now"
 nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
 nvidia-smi --query-gpu=memory.used --format=csv

@@ -19,4 +19,7 @@
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
+# Compute nodes have no internet: read models from the cache filled on the login node.
+export HF_HOME="${HF_HOME:-/projects/EEHPC-DEV-2026D07-102/safedrive/hf_cache}"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 WANDB_MODE=offline
 bash scripts/eval.sh "$@"
