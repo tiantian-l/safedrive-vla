@@ -25,6 +25,11 @@ PY="${CONDA_ROOT}/envs/${ENV_NAME}/bin/python"
 PORT="${PORT:-2000}"
 LOAD_TOWN="${LOAD_TOWN:-Town12}"
 export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1
+# The node registers four Vulkan drivers (NVIDIA, Intel, Radeon and lavapipe, a CPU
+# software renderer). Expose only NVIDIA so that CARLA cannot pick a CPU renderer.
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
+export VK_DRIVER_FILES="$VK_ICD_FILENAMES"
+UE_LOG="$CARLA_ROOT/CarlaUE4/Saved/Logs/CarlaUE4.log"
 
 step() { echo; echo "========== $* =========="; }
 
@@ -34,6 +39,7 @@ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
 
 step "2. Vulkan (CARLA renders with Vulkan)"
 ls /usr/share/vulkan/icd.d /etc/vulkan/icd.d 2>&1
+echo "VK_ICD_FILENAMES=$VK_ICD_FILENAMES"; cat "$VK_ICD_FILENAMES"
 command -v vulkaninfo >/dev/null && vulkaninfo --summary 2>&1 | head -30 || echo "vulkaninfo not installed (not fatal)"
 ldconfig -p | grep -E "libvulkan|libGLX_nvidia|libEGL_nvidia" || echo "WARNING: no Vulkan/NVIDIA GL libraries found by ldconfig"
 
@@ -51,10 +57,13 @@ GPU_LOG="carla_smoke_gpu_${JOB}.csv"
 # GPU utilisation / memory every 15 s: shows whether CARLA is rendering at all.
 nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv -l 15 > "$GPU_LOG" 2>&1 &
 MON_PID=$!
-"$CARLA_ROOT/CarlaUE4.sh" -RenderOffScreen -nosound -carla-rpc-port="$PORT" -graphicsadapter=0 > "$SERVER_LOG" 2>&1 &
+"$CARLA_ROOT/CarlaUE4.sh" -RenderOffScreen -nosound -prefernvidia -carla-rpc-port="$PORT" -graphicsadapter=0 > "$SERVER_LOG" 2>&1 &
 CARLA_PID=$!
 cleanup() {
   step "Server log (last 40 lines)"; tail -40 "$SERVER_LOG"
+  step "Unreal Engine log: Vulkan / GPU / errors"
+  grep -iE "vulkan|rhi|adapter|gpu|error|fatal|crash|exit" "$UE_LOG" 2>/dev/null | head -60 || echo "no UE log at $UE_LOG"
+  cp "$UE_LOG" "carla_smoke_ue_${JOB}.log" 2>/dev/null
   step "GPU monitor"; cat "$GPU_LOG"
   kill "$MON_PID" 2>/dev/null
   kill -- -"$CARLA_PID" 2>/dev/null; pkill -f "carla-rpc-port=$PORT" 2>/dev/null

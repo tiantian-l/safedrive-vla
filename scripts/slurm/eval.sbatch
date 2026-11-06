@@ -22,4 +22,7 @@ cd "${SLURM_SUBMIT_DIR}"
 # Compute nodes have no internet: read models from the cache filled on the login node.
 export HF_HOME="${HF_HOME:-/projects/EEHPC-DEV-2026D07-102/safedrive/hf_cache}"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 WANDB_MODE=offline
+# Only the NVIDIA Vulkan driver, so that CARLA never renders on lavapipe (CPU).
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
+export VK_DRIVER_FILES="$VK_ICD_FILENAMES"
 bash scripts/eval.sh "$@"
