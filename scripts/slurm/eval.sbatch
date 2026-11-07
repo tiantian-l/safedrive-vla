@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Slurm wrapper of scripts/eval.sh (one node = 4 A100; use --gpu-ids 0,0,1,1,2,2,3,3 for two routes per GPU).
-# Activate the conda environment and export CARLA_ROOT before submitting, e.g.
+# CARLA_ROOT and the conda environment default to the project paths below; override
+# them by exporting CARLA_ROOT / CONDA_ROOT / ENV_NAME before submitting, e.g.
 #
 #   sbatch scripts/slurm/eval.sbatch carla_f <checkpoint> --gpu-ids 0,0,1,1,2,2,3,3
 #
@@ -19,6 +20,10 @@
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
+export CARLA_ROOT="${CARLA_ROOT:-/projects/EEHPC-DEV-2026D07-102/safedrive/carla0915}"
+CONDA_ROOT="${CONDA_ROOT:-/projects/EEHPC-DEV-2026D07-102/dreamer/dependency/miniconda3}"
+export PATH="${CONDA_ROOT}/envs/${ENV_NAME:-safedrive}/bin:${PATH}"
+export PYTHONNOUSERSITE=1
 # Compute nodes have no internet: read models from the cache filled on the login node.
 export HF_HOME="${HF_HOME:-/projects/EEHPC-DEV-2026D07-102/safedrive/hf_cache}"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 WANDB_MODE=offline
