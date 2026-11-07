@@ -29,7 +29,9 @@ export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1
 # software renderer). Expose only NVIDIA so that CARLA cannot pick a CPU renderer.
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
 export VK_DRIVER_FILES="$VK_ICD_FILENAMES"
-UE_LOG="$CARLA_ROOT/CarlaUE4/Saved/Logs/CarlaUE4.log"
+# Packaged UE4 builds on Linux write their log under ~/.config/Epic, not under CARLA_ROOT.
+UE_LOG="$HOME/.config/Epic/CarlaUE4/Saved/Logs/CarlaUE4.log"
+[[ -f "$UE_LOG" ]] || UE_LOG="$CARLA_ROOT/CarlaUE4/Saved/Logs/CarlaUE4.log"
 
 step() { echo; echo "========== $* =========="; }
 
@@ -62,6 +64,8 @@ CARLA_PID=$!
 cleanup() {
   step "Server log (last 40 lines)"; tail -40 "$SERVER_LOG"
   step "Unreal Engine log: Vulkan / GPU / errors"
+  [[ -f "$UE_LOG" ]] || UE_LOG="$(find "$HOME/.config/Epic" "$CARLA_ROOT" -name 'CarlaUE4.log' -newer "$SERVER_LOG" 2>/dev/null | head -1)"
+  echo "UE log: ${UE_LOG:-not found}"
   grep -iE "vulkan|rhi|adapter|gpu|error|fatal|crash|exit" "$UE_LOG" 2>/dev/null | head -60 || echo "no UE log at $UE_LOG"
   cp "$UE_LOG" "carla_smoke_ue_${JOB}.log" 2>/dev/null
   step "GPU monitor"; cat "$GPU_LOG"
