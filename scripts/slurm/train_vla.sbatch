@@ -12,7 +12,7 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=512G
 #SBATCH --time=3-00:00:00
-#SBATCH --output=%x-%j.out
+#SBATCH --output=logs/slurm/%x-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"

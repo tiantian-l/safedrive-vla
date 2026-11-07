@@ -16,9 +16,13 @@ database/
 ckpts/
 benchmark/data/generated/
 
-# cluster logs
+# cluster logs (Slurm writes to logs/slurm/, which must exist before sbatch)
 *.out
 *.err
+logs/*
+!logs/slurm/
+logs/slurm/*
+!logs/slurm/.gitkeep
 
 # editors / OS
 .vscode/

@@ -16,7 +16,7 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --partition=normal-a100-80
 #SBATCH --account=eehpc-dev-2026d07-102g
-#SBATCH --output=%x-%j.out
+#SBATCH --output=logs/slurm/%x-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"

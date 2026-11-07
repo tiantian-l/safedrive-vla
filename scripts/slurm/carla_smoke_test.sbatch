@@ -4,7 +4,8 @@
 #   LOAD_TOWN=none sbatch scripts/slurm/carla_smoke_test.sbatch   # skip the large-map test
 # Checks, in order: GPU, Vulkan, internet, CARLA start, Python client connection,
 # loading a large town (Town12, needs AdditionalMaps), GPU memory of CARLA.
-# Send the whole slurm-carla-smoke-<jobid>.out back for review.
+# Output: logs/slurm/carla_smoke-<jobid>.out (send it back for review); server, GPU and
+# Unreal logs in logs/smoke/. Submit from the repository root.
 #SBATCH --job-name=carla_smoke
 #SBATCH --nodes=1
 #SBATCH --gpus=1
@@ -14,7 +15,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --partition=dev-a100-80
 #SBATCH --account=eehpc-dev-2026d07-102g
-#SBATCH --output=slurm-carla-smoke-%j.out
+#SBATCH --output=logs/slurm/%x-%j.out
 set -uo pipefail
 
 PROJECT=/projects/EEHPC-DEV-2026D07-102
@@ -54,8 +55,9 @@ step "4. Python environment"
 step "5. Start CARLA headless on port $PORT"
 test -x "$CARLA_ROOT/CarlaUE4.sh" || { echo "FATAL: $CARLA_ROOT/CarlaUE4.sh not found"; exit 1; }
 JOB="${SLURM_JOB_ID:-local}"
-SERVER_LOG="carla_smoke_server_${JOB}.log"
-GPU_LOG="carla_smoke_gpu_${JOB}.csv"
+mkdir -p logs/smoke
+SERVER_LOG="logs/smoke/server_${JOB}.log"
+GPU_LOG="logs/smoke/gpu_${JOB}.csv"
 # GPU utilisation / memory every 15 s: shows whether CARLA is rendering at all.
 nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv -l 15 > "$GPU_LOG" 2>&1 &
 MON_PID=$!
@@ -67,7 +69,7 @@ cleanup() {
   [[ -f "$UE_LOG" ]] || UE_LOG="$(find "$HOME/.config/Epic" "$CARLA_ROOT" -name 'CarlaUE4.log' -newer "$SERVER_LOG" 2>/dev/null | head -1)"
   echo "UE log: ${UE_LOG:-not found}"
   grep -iE "vulkan|rhi|adapter|gpu|error|fatal|crash|exit" "$UE_LOG" 2>/dev/null | head -60 || echo "no UE log at $UE_LOG"
-  cp "$UE_LOG" "carla_smoke_ue_${JOB}.log" 2>/dev/null
+  cp "$UE_LOG" "logs/smoke/ue_${JOB}.log" 2>/dev/null
   step "GPU monitor"; cat "$GPU_LOG"
   kill "$MON_PID" 2>/dev/null
   kill -- -"$CARLA_PID" 2>/dev/null; pkill -f "carla-rpc-port=$PORT" 2>/dev/null
