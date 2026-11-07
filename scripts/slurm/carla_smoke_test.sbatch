@@ -82,25 +82,38 @@ done
 
 step "6. Python client: default map + camera first, then $LOAD_TOWN"
 timeout 2700 "$PY" -u - "$PORT" "$LOAD_TOWN" <<'PYEOF'
+# Mirrors what the Bench2Drive leaderboard does (leaderboard_evaluator.py): synchronous
+# mode with spectator_as_ego=False before loading, load_world(reset_settings=False),
+# large-map streaming distances of 650 m, one tick, then an ego with role_name 'hero'
+# (large maps stream their tiles around the hero vehicle).
 import sys, time
 import carla
 T0 = time.time()
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')} +{time.time() - T0:5.0f}s] {msg}", flush=True)
 
-def drive(world, ticks, label):
-    """Ego vehicle + front camera in synchronous mode; returns camera frames received."""
+def sync_settings(world):
     settings = world.get_settings()
-    settings.synchronous_mode, settings.fixed_delta_seconds = True, 0.05
+    settings.synchronous_mode = True
+    settings.fixed_delta_seconds = 0.05
+    settings.deterministic_ragdolls = True
+    settings.spectator_as_ego = False
     world.apply_settings(settings)
+
+def drive(world, ticks, label):
+    """Hero vehicle + front camera in synchronous mode; returns camera frames received."""
     lib = world.get_blueprint_library()
-    ego = world.spawn_actor(lib.find("vehicle.lincoln.mkz_2020"), world.get_map().get_spawn_points()[0])
+    bp = lib.find("vehicle.lincoln.mkz_2020")
+    bp.set_attribute("role_name", "hero")
+    ego = world.spawn_actor(bp, world.get_map().get_spawn_points()[0])
+    world.tick()
+    log(f"{label}: hero spawned at {ego.get_location()}")
     cam_bp = lib.find("sensor.camera.rgb")
     cam_bp.set_attribute("image_size_x", "1024"); cam_bp.set_attribute("image_size_y", "512")
     cam = world.spawn_actor(cam_bp, carla.Transform(carla.Location(x=-1.5, z=2.0)), attach_to=ego)
     frames = []
     cam.listen(lambda img: frames.append(img.frame))
-    log(f"{label}: ego + camera spawned, ticking")
+    log(f"{label}: camera attached, ticking")
     t0 = time.time()
     for k in range(ticks):
         world.tick()
@@ -109,8 +122,7 @@ def drive(world, ticks, label):
     dt = time.time() - t0
     log(f"{label}: {ticks} ticks in {dt:.1f}s ({ticks / dt:.1f} ticks/s), camera frames {len(frames)}")
     cam.stop(); cam.destroy(); ego.destroy()
-    settings.synchronous_mode = False
-    world.apply_settings(settings)
+    world.tick()
     return len(frames)
 
 port, town = int(sys.argv[1]), sys.argv[2]
@@ -128,6 +140,7 @@ else:
 log(f"connected: server {client.get_server_version()}, map {world.get_map().name}")
 
 client.set_timeout(120.0)
+sync_settings(world)
 ok_small = drive(world, 100, "A default map") > 0
 log("A default map: " + ("rendering OK" if ok_small else "FATAL: no camera frames, rendering is broken"))
 if not ok_small:
@@ -137,10 +150,15 @@ if town.lower() != "none":
     client.set_timeout(1800.0)
     log(f"B loading {town} (large map, can take many minutes) ...")
     t0 = time.time()
-    world = client.load_world(town)
-    log(f"B loaded {world.get_map().name} in {time.time() - t0:.0f}s")
-    client.set_timeout(120.0)
-    if drive(world, 50, f"B {town}") == 0:
+    world = client.load_world(town, reset_settings=False)
+    settings = world.get_settings()
+    settings.tile_stream_distance = 650
+    settings.actor_active_distance = 650
+    world.apply_settings(settings)
+    world.tick()
+    log(f"B loaded {world.get_map().name} in {time.time() - t0:.0f}s, synchronous={world.get_settings().synchronous_mode}")
+    client.set_timeout(300.0)
+    if drive(world, 100, f"B {town}") == 0:
         log(f"FATAL: no camera frames on {town}"); sys.exit(1)
 log("SMOKE TEST PASSED")
 PYEOF
