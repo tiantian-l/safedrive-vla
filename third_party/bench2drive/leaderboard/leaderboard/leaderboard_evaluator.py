@@ -200,6 +200,28 @@ class LeaderboardEvaluator(object):
             sensor.stop()
             sensor.destroy()
 
+    def _kill_own_carla(self, port):
+        """SIGKILL the CARLA server started by this evaluator: its process group
+        (CarlaUE4.sh runs in its own session) and any CarlaUE4 process still
+        listening on exactly this RPC port."""
+        server = getattr(self, "server", None)
+        if server is not None:
+            try:
+                os.killpg(server.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        try:
+            out = subprocess.check_output(["ps", "-eo", "pid,args="], text=True)
+        except Exception:
+            return
+        flag = f"-carla-rpc-port={port}"
+        for line in out.splitlines():
+            if "CarlaUE4" in line and flag in line.split():
+                try:
+                    os.kill(int(line.split(None, 1)[0]), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, ValueError):
+                    pass
+
     def _setup_simulation(self, args):
         """
         Prepares the simulation by getting the client, and setting up the world and traffic manager settings
@@ -504,9 +526,10 @@ class LeaderboardEvaluator(object):
             self.statistics_manager.validate_and_write_statistics(self.sensors_initialized, crashed)
         
         if crashed:
-            cmd2 = "ps -ef | grep '-graphicsadapter="+ str(args.gpu_rank) + "' | grep -v grep | awk '{print $2}' | xargs -r kill -9"
-            server = subprocess.Popen(cmd2, shell=True, preexec_fn=os.setsid)
-            atexit.register(os.killpg, server.pid, signal.SIGKILL)
+            # Kill only this evaluator's CARLA server. The original code killed every
+            # process with '-graphicsadapter=<gpu>', which also took down the other
+            # evaluations sharing the same GPU.
+            self._kill_own_carla(args.port)
 
         return crashed
 

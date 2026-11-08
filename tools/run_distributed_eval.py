@@ -153,7 +153,8 @@ class Runner:
 
     def poll(self) -> None:
         """Release finished slots; kill slots past the route walltime or whose
-        CARLA server disappeared."""
+        CARLA server disappeared. The leaderboard may move CARLA to the next free
+        port, so a slot owns the whole range [port, port + 100)."""
         ports = {port for _, port in _carla_processes()}
         now = time.monotonic()
         for slot in self.slots:
@@ -165,7 +166,7 @@ class Runner:
                 if elapsed > self.args.route_walltime:
                     self._kill(slot, "route walltime exceeded")
                     running = False
-                elif elapsed > self.args.carla_grace and slot.port not in ports:
+                elif elapsed > self.args.carla_grace and not any(slot.port <= p < slot.port + 100 for p in ports):
                     slot.carla_missing_since = slot.carla_missing_since or now
                     if now - slot.carla_missing_since > self.args.carla_grace:
                         self._kill(slot, "CARLA server is gone")
