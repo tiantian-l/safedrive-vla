@@ -57,6 +57,15 @@ from team_code.nav_planner import LateralPIDController, RoutePlanner
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SAVE_VIZ = os.environ.get("SAFEDRIVE_SAVE_VIZ", "0") == "1"
+# Track the target speed parsed from the instruction text (language agents only;
+# see SafeDriveLanguageAgent.instruction_target_speed). Off by default.
+SPEED_TRACK = os.environ.get("SAFEDRIVE_SPEED_TRACK", "0") == "1"
+# Per-tick timings, driving mode and controller targets in agent_debug.json
+# next to metric_info.json (not part of the submission). Off by default.
+DEBUG_LOG = os.environ.get("SAFEDRIVE_DEBUG_LOG", "0") == "1"
+DEBUG_FLUSH_EVERY = 100
+MAX_LATERAL_ACCEL = 3.0     # m/s^2, caps the tracked speed on curved paths
+MODE_NAMES = {"<STRICT>": "strict", "<CAUTIOUS>": "cautious", "<FALLBACK>": "fallback"}
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -183,6 +192,8 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         self.save_dir = save_root / f"{route_name}_{time.strftime('%Y_%m_%d_%H_%M_%S')}"
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.metric_info = {}
+        self.debug_log = {}
+        self.mode = None
         if SAVE_VIZ:
             (self.save_dir / "images").mkdir(exist_ok=True)
 
@@ -322,7 +333,9 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
             self.tick(input_data)
             return self.control
 
+        t0 = time.perf_counter()
         tick = self.tick(input_data)
+        t_tick = time.perf_counter()
         if self.step < self.config.initial_frames_delay:
             self.control = carla.VehicleControl(0.0, 0.0, 1.0)
             self._log_metric_info()
@@ -337,21 +350,29 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         try:
             generated = self.model.vlm.generate(**inputs, do_sample=False, max_new_tokens=self.config.max_new_tokens,
                                                 pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id)
+            if DEBUG_LOG:
+                torch.cuda.synchronize()
+            t_gen = time.perf_counter()
             path = self._predict_path(generated, inputs)
+            if DEBUG_LOG:
+                torch.cuda.synchronize()
+            t_path = time.perf_counter()
         finally:
             self.model.clear_conditioning()
 
         prompt_len = inputs["input_ids"].shape[1]
+        answer = self.tokenizer.decode(generated[0, prompt_len:], skip_special_tokens=False)
+        self.mode = next((name for token, name in MODE_NAMES.items() if token in answer), None)
         indices = [t - self.model.action_start_id for t in generated[0, prompt_len:].tolist()
                    if self.model.action_start_id <= t < self.model.action_end_id][: self.horizon]
         indices += [0] * (self.horizon - len(indices))
         trajectory = self.action_tokenizer.rollout_xy(indices)
         steer_points = path if path is not None else trajectory
         velocity = torch.tensor([tick["speed"]], dtype=torch.float32)
-        steer, throttle, brake = self.control_pid(steer_points, velocity[0].numpy(), trajectory)
+        target_speed = self.tracked_speed(steer_points) if SPEED_TRACK else None
+        steer, throttle, brake = self.control_pid(steer_points, velocity[0].numpy(), trajectory, target_speed)
 
         if SAVE_VIZ and self.step % 5 == 0:
-            answer = self.tokenizer.decode(generated[0, prompt_len:], skip_special_tokens=False)
             self._save_image(tick["target_points"], trajectory, path, answer)
 
         if velocity < 0.1:
@@ -366,8 +387,58 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
             self.force_move -= 1
 
         self.control = carla.VehicleControl(steer=float(steer), throttle=float(throttle), brake=float(brake))
+        t_ctrl = time.perf_counter()
         self._log_metric_info()
+        if DEBUG_LOG:
+            self._log_debug({
+                "t_tick": round(t_tick - t0, 4), "t_generate": round(t_gen - t_tick, 4),
+                "t_path": round(t_path - t_gen, 4), "t_control": round(t_ctrl - t_path, 4),
+                "t_log": round(time.perf_counter() - t_ctrl, 4), "new_tokens": int(generated.shape[1] - prompt_len),
+                "mode": self.mode, "speed": round(float(tick["speed"]), 3),
+                "model_speed": round(self._model_desired_speed(trajectory), 3),
+                "target_speed": None if target_speed is None else round(float(target_speed), 3),
+                "instruction": self.instruction, "throttle": round(float(throttle), 3), "brake": bool(brake),
+            })
         return self.control
+
+    # ------------------------------------------------------------------
+    # instruction speed tracking
+    # ------------------------------------------------------------------
+    def instruction_target_speed(self):
+        """Target speed (m/s) of the active instruction, parsed from its text;
+        None when no speed instruction is active. The base agent has none."""
+        return None
+
+    def tracked_speed(self, path: np.ndarray):
+        """Speed the longitudinal controller tracks instead of the action-token
+        speed: the instruction's target speed while the model drives in strict
+        mode, capped by the lateral acceleration on the predicted path. The
+        model's own speed is kept whenever it is cautious or falls back."""
+        target = self.instruction_target_speed()
+        if target is None or self.mode != "strict":
+            return None
+        curvature = self._path_curvature(path)
+        if curvature > 1e-4:
+            target = min(target, math.sqrt(MAX_LATERAL_ACCEL / curvature))
+        return float(target)
+
+    @staticmethod
+    def _path_curvature(path: np.ndarray) -> float:
+        """Curvature (1/m) of the predicted path from a least-squares parabola
+        y = a x^2 + b x through the ego origin (ego frame, x forward). A fit over
+        all points is robust to centimetre jitter, which three-point estimates
+        read as tight curves; on real curves it errs on the high side."""
+        p = np.asarray(path, dtype=np.float64)[:, :2]
+        x, y = p[:, 0], p[:, 1]
+        if len(p) < 3 or np.ptp(x) < 5.0:
+            return 0.0
+        (a, b), *_ = np.linalg.lstsq(np.stack([x * x, x], axis=1), y, rcond=None)
+        return float(abs(2.0 * a) / (1.0 + b * b) ** 1.5)
+
+    @staticmethod
+    def _model_desired_speed(trajectory: np.ndarray) -> float:
+        half, full = 1, 3  # waypoint indices of 0.5 s and 1.0 s at 4 Hz
+        return float(np.linalg.norm(trajectory[half] - trajectory[full]) * 2.0)
 
     def _predict_path(self, generated: torch.Tensor, inputs: dict):
         """Path head on the hidden state of ``<ACTIONS>`` (teacher-forced pass
@@ -378,11 +449,11 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         path, _ = self.model.predict_path(generated, hidden.to(self.model.path_head.mlp[0].weight.dtype))
         return path[0].float().cpu().numpy()
 
-    def control_pid(self, path: np.ndarray, speed: np.ndarray, trajectory: np.ndarray):
+    def control_pid(self, path: np.ndarray, speed: np.ndarray, trajectory: np.ndarray, target_speed=None):
         """Lateral PID along ``path``; longitudinal PID towards the speed of the
-        action-token ``trajectory`` between 0.5 s and 1.0 s."""
-        half, full = 1, 3  # waypoint indices of 0.5 s and 1.0 s at 4 Hz
-        desired_speed = np.linalg.norm(trajectory[half] - trajectory[full]) * 2.0
+        action-token ``trajectory`` between 0.5 s and 1.0 s, or towards
+        ``target_speed`` when given (instruction speed tracking)."""
+        desired_speed = self._model_desired_speed(trajectory) if target_speed is None else float(target_speed)
         brake = desired_speed < self.config.brake_speed or (speed / max(float(desired_speed), 1e-4)) > self.config.brake_ratio
         delta = np.clip(desired_speed - speed, 0.0, self.config.clip_delta)
         throttle = np.clip(self.speed_controller.step(delta), 0.0, self.config.clip_throttle)
@@ -408,6 +479,19 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
             json.dump(self.metric_info, f, indent=4)
         os.replace(tmp, self.save_dir / "metric_info.json")
 
+    def _log_debug(self, record: dict) -> None:
+        self.debug_log[self.step] = record
+        if len(self.debug_log) % DEBUG_FLUSH_EVERY == 0:
+            self._write_debug()
+
+    def _write_debug(self) -> None:
+        if not self.debug_log:
+            return
+        tmp = self.save_dir / "agent_debug.json.tmp"
+        with open(tmp, "w") as f:
+            json.dump(self.debug_log, f)
+        os.replace(tmp, self.save_dir / "agent_debug.json")
+
     def _save_image(self, target_points, trajectory, path, answer: str) -> None:
         image = Image.fromarray(cv2.cvtColor(self.camera_for_viz, cv2.COLOR_BGR2RGB))
         w, h = image.size
@@ -430,6 +514,8 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         canvas.save(self.save_dir / "images" / f"{self.step:05d}.png")
 
     def destroy(self, results=None):
+        if DEBUG_LOG and hasattr(self, "debug_log"):
+            self._write_debug()
         if hasattr(self, "model"):
             del self.model
         torch.cuda.empty_cache()

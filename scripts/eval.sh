@@ -11,6 +11,9 @@
 #   --routes-dir DIR            route files to evaluate (default: benchmark/data/<benchmark>)
 #   --output-dir DIR            default: work_dirs/eval/<benchmark>/<experiment>
 #   --save-viz                  save front-camera images with the predictions
+#   --speed-track               CARLA-F: track the target speed parsed from the instruction
+#                               while the model drives in strict mode (SAFEDRIVE_SPEED_TRACK)
+#   --debug-log                 write agent_debug.json (timings, mode, speeds) per route
 #
 # Requires CARLA_ROOT. Interrupted runs resume: completed routes are skipped.
 set -euo pipefail
@@ -24,6 +27,8 @@ OUTPUT_DIR=""
 ROUTES_DIR="benchmark/data/${BENCHMARK}"
 export SAFEDRIVE_NAV_SIGNAL="target_point"
 export SAFEDRIVE_SAVE_VIZ="0"
+export SAFEDRIVE_SPEED_TRACK="${SAFEDRIVE_SPEED_TRACK:-0}"
+export SAFEDRIVE_DEBUG_LOG="${SAFEDRIVE_DEBUG_LOG:-0}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --gpu-ids)    GPU_IDS="$2"; shift 2 ;;
@@ -31,6 +36,8 @@ while [[ $# -gt 0 ]]; do
     --routes-dir) ROUTES_DIR="$(realpath "$2")"; shift 2 ;;
     --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
     --save-viz)   SAFEDRIVE_SAVE_VIZ="1"; shift ;;
+    --speed-track) SAFEDRIVE_SPEED_TRACK="1"; shift ;;
+    --debug-log)  SAFEDRIVE_DEBUG_LOG="1"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -59,6 +66,7 @@ if [[ -z "${OUTPUT_DIR}" ]]; then
 fi
 export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"
 export TOKENIZERS_PARALLELISM=false
+echo "speed_track=${SAFEDRIVE_SPEED_TRACK} debug_log=${SAFEDRIVE_DEBUG_LOG} save_viz=${SAFEDRIVE_SAVE_VIZ}"
 
 python tools/run_distributed_eval.py \
   --routes-dir "${ROUTES_DIR}" \

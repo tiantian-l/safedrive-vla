@@ -65,6 +65,10 @@ class Instruction:
 
 class SafeDriveLanguageAgent(SafeDriveAgent):
     COMPLETION_MONITOR = True
+    # Speed tracking (SAFEDRIVE_SPEED_TRACK=1) only for CARLA-F's safe target-speed
+    # instructions; the conflict agent turns it off, since its requested speeds
+    # are the unsafe part of the instruction.
+    TRACK_INSTRUCTION_SPEED = True
     # instruction text -> meta-command; text outside the table: no anchor
     META_COMMAND_TABLE = INSTRUCTION_META_COMMANDS
     UNKNOWN_META_COMMAND: Optional[str] = None
@@ -195,6 +199,15 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
         instr = self.current_instruction
         self.instruction = instr.text.rstrip(". ") if instr is not None else "follow the road"
         return super().tick(input_data)
+
+    def instruction_target_speed(self):
+        """Target speed parsed from the text of the active instruction, if it is
+        a target-speed instruction (one with a speed and a duration)."""
+        instr = self.current_instruction
+        if not self.TRACK_INSTRUCTION_SPEED or instr is None or instr.duration_meters <= 0:
+            return None
+        match = _SPEED_RE.search(instr.text)
+        return float(match.group(1)) if match else None
 
     def anchor_meta_command(self) -> int:
         """Meta-command parsed from the instruction text."""
