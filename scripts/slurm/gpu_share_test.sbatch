@@ -14,7 +14,6 @@
 #SBATCH --ntasks=1
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=160G
 #SBATCH --time=02:30:00
 #SBATCH --partition=dev-a100-40
 #SBATCH --account=eehpc-dev-2026d07-102g
