@@ -14,6 +14,9 @@
 #   --speed-track               CARLA-F: track the target speed parsed from the instruction
 #                               while the model drives in strict mode (SAFEDRIVE_SPEED_TRACK)
 #   --debug-log                 write agent_debug.json (timings, mode, speeds) per route
+#   --route-walltime S          kill and retry a route after S wall-clock seconds (default 14400).
+#                               B2D-C routes where the ego waits can need hours when several
+#                               routes share a GPU; 3600 s killed them over and over.
 #
 # Requires CARLA_ROOT. Interrupted runs resume: completed routes are skipped.
 set -euo pipefail
@@ -29,6 +32,7 @@ export SAFEDRIVE_NAV_SIGNAL="target_point"
 export SAFEDRIVE_SAVE_VIZ="0"
 export SAFEDRIVE_SPEED_TRACK="${SAFEDRIVE_SPEED_TRACK:-0}"
 export SAFEDRIVE_DEBUG_LOG="${SAFEDRIVE_DEBUG_LOG:-0}"
+ROUTE_WALLTIME=14400
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --gpu-ids)    GPU_IDS="$2"; shift 2 ;;
@@ -38,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --save-viz)   SAFEDRIVE_SAVE_VIZ="1"; shift ;;
     --speed-track) SAFEDRIVE_SPEED_TRACK="1"; shift ;;
     --debug-log)  SAFEDRIVE_DEBUG_LOG="1"; shift ;;
+    --route-walltime) ROUTE_WALLTIME="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -74,7 +79,8 @@ python tools/run_distributed_eval.py \
   --agent "${AGENT}" \
   --agent-config "$(realpath "${CHECKPOINT}")" \
   --gpu-ids "${GPU_IDS}" \
-  --base-tm-port 8000
+  --base-tm-port 8000 \
+  --route-walltime "${ROUTE_WALLTIME}"
 
 if [[ "${BENCHMARK}" == carla_f ]]; then
   python benchmark/metrics/carla_f_metrics.py "${OUTPUT_DIR}" --routes-dir "${ROUTES_DIR}"
