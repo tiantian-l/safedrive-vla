@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Slurm wrapper of scripts/eval.sh (one node = 4 A100; use --gpu-ids 0,0,1,1,2,2,3,3 for two routes per GPU).
+# Slurm wrapper of scripts/eval.sh (one node = 4 A100). Three routes per A100-40GB fit
+# (gpu_share test, job 2207285: 33 GB peak, 2.3x throughput), e.g. --gpu-ids 0,0,0,1,1,1.
+# Memory is not requested: Slurm assigns the maximum (~120G per GPU).
 # CARLA_ROOT and the conda environment default to the project paths below; override
 # them by exporting CARLA_ROOT / CONDA_ROOT / ENV_NAME before submitting, e.g.
 #
@@ -12,7 +14,6 @@
 #SBATCH --ntasks=1
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=120
-#SBATCH --mem=460G
 #SBATCH --time=2-00:00:00
 #SBATCH --partition=normal-a100-80
 #SBATCH --account=eehpc-dev-2026d07-102g
