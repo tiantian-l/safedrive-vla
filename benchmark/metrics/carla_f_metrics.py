@@ -41,6 +41,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from run_distributed_eval import result_is_complete  # noqa: E402
 
+# Not scored on the server (track3 README, update of October 18, 2026).
+EXCLUDED_ROUTES = (
+    "bench2drive_193_language_rebuilt_turn_left",
+    "bench2drive_193_language_rebuilt_turn_straight",
+    "bench2drive_198_language_rebuilt_turn_right",
+    "bench2drive_202_language_rebuilt_turn_left",
+    "bench2drive_211_language_rebuilt_lane_follow",
+)
 TURN_THRESHOLD_M = 15.0
 LANE_TAIL_FRACTION = 0.2
 SIM_DT_S = 0.05            # CARLA runs at 20 Hz
@@ -214,7 +222,10 @@ def main() -> None:
     args = parser.parse_args()
 
     maps = CarlaMaps()
-    passed, total, errors, missing = Counter(), Counter(), [], []
+    # "all": every route of --routes-dir (as before); "scored": without EXCLUDED_ROUTES,
+    # the server's 35-route NCR / SE (missing scored routes count as all failed there).
+    stats = {k: {"passed": Counter(), "total": Counter(), "errors": []} for k in ("all", "scored")}
+    missing, per_route = [], {}
     for xml_path in sorted(args.routes_dir.glob("*.xml")):
         name = xml_path.stem
         traj = load_trajectory(args.output_dir / "viz" / name)
@@ -222,24 +233,41 @@ def main() -> None:
             missing.append(name)
             continue
         route, gt, instructions = parse_route(xml_path)
-        for r in instruction_compliance(gt, traj, instructions, maps.get(route.attrib["town"])):
-            total[r["category"]] += 1
-            passed[r["category"]] += int(r["passed"])
+        results = instruction_compliance(gt, traj, instructions, maps.get(route.attrib["town"]))
         err = speed_error(route, traj)
-        if err is not None:
-            errors.append(err)
+        scored = name not in EXCLUDED_ROUTES
+        for key in ("all", "scored") if scored else ("all",):
+            for r in results:
+                stats[key]["total"][r["category"]] += 1
+                stats[key]["passed"][r["category"]] += int(r["passed"])
+            if err is not None:
+                stats[key]["errors"].append(err)
+        per_route[name] = {
+            "scored": scored,
+            "instructions": results,
+            "speed_error": err,
+            "driven_m": round(cumulative_distances(traj)[-1], 1),
+            "route_m": round(cumulative_distances(gt)[-1], 1),
+            "game_s": round(len(traj) * SIM_DT_S, 1),
+        }
 
-    metrics = {f"NCR {c}": 100.0 * passed[c] / total[c] for c in CATEGORIES.values() if total[c]}
-    metrics["NCR Avg"] = 100.0 * sum(passed.values()) / max(1, sum(total.values()))
-    metrics["Speed Error"] = sum(errors) / len(errors) if errors else float("nan")
+    metrics = {}
+    for key, prefix in (("all", ""), ("scored", "Scored ")):
+        passed, total, errors = stats[key]["passed"], stats[key]["total"], stats[key]["errors"]
+        if key == "all":
+            metrics.update({f"NCR {c}": 100.0 * passed[c] / total[c] for c in CATEGORIES.values() if total[c]})
+        metrics[f"{prefix}NCR Avg"] = 100.0 * sum(passed.values()) / max(1, sum(total.values()))
+        metrics[f"{prefix}Speed Error"] = sum(errors) / len(errors) if errors else float("nan")
     metrics["evaluated_routes"] = len(list(args.routes_dir.glob("*.xml"))) - len(missing)
+    metrics["evaluated_scored_routes"] = sum(v["scored"] for v in per_route.values())
     if missing:
         print(f"Warning: {len(missing)} routes without a complete result: {', '.join(missing)}")
     for key, value in metrics.items():
         print(f"{key:>22}: {value:.2f}" if isinstance(value, float) else f"{key:>22}: {value}")
     with open(args.output_dir / "metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
-
+    with open(args.output_dir / "per_route.json", "w") as f:
+        json.dump(per_route, f, indent=2)
 
 if __name__ == "__main__":
     main()
