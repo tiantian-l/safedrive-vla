@@ -13,7 +13,11 @@
 #   --save-viz                  save front-camera images with the predictions
 #   --speed-track               CARLA-F: track the target speed parsed from the instruction
 #                               while the model drives in strict mode (SAFEDRIVE_SPEED_TRACK)
-#   --debug-log                 write agent_debug.json (timings, mode, speeds) per route
+#   --debug-log                 write agent_debug.json (timings, mode, speeds, prompt) per route
+#   --instr-norm                CARLA-F: rewrite the instruction into a training-time prompt
+#                               phrasing built from its parsed meta-command (SAFEDRIVE_INSTR_NORM)
+#   --no-creep                  never force the ego to creep after standing still for
+#                               stuck_threshold ticks (SAFEDRIVE_NO_CREEP)
 #   --route-walltime S          kill and retry a route after S wall-clock seconds (default 14400).
 #                               B2D-C routes where the ego waits can need hours when several
 #                               routes share a GPU; 3600 s killed them over and over.
@@ -32,6 +36,8 @@ export SAFEDRIVE_NAV_SIGNAL="target_point"
 export SAFEDRIVE_SAVE_VIZ="0"
 export SAFEDRIVE_SPEED_TRACK="${SAFEDRIVE_SPEED_TRACK:-0}"
 export SAFEDRIVE_DEBUG_LOG="${SAFEDRIVE_DEBUG_LOG:-0}"
+export SAFEDRIVE_INSTR_NORM="${SAFEDRIVE_INSTR_NORM:-0}"
+export SAFEDRIVE_NO_CREEP="${SAFEDRIVE_NO_CREEP:-0}"
 ROUTE_WALLTIME=14400
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -42,6 +48,8 @@ while [[ $# -gt 0 ]]; do
     --save-viz)   SAFEDRIVE_SAVE_VIZ="1"; shift ;;
     --speed-track) SAFEDRIVE_SPEED_TRACK="1"; shift ;;
     --debug-log)  SAFEDRIVE_DEBUG_LOG="1"; shift ;;
+    --instr-norm) SAFEDRIVE_INSTR_NORM="1"; shift ;;
+    --no-creep)   SAFEDRIVE_NO_CREEP="1"; shift ;;
     --route-walltime) ROUTE_WALLTIME="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
@@ -71,7 +79,7 @@ if [[ -z "${OUTPUT_DIR}" ]]; then
 fi
 export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"
 export TOKENIZERS_PARALLELISM=false
-echo "speed_track=${SAFEDRIVE_SPEED_TRACK} debug_log=${SAFEDRIVE_DEBUG_LOG} save_viz=${SAFEDRIVE_SAVE_VIZ}"
+echo "speed_track=${SAFEDRIVE_SPEED_TRACK} debug_log=${SAFEDRIVE_DEBUG_LOG} instr_norm=${SAFEDRIVE_INSTR_NORM} no_creep=${SAFEDRIVE_NO_CREEP} save_viz=${SAFEDRIVE_SAVE_VIZ}"
 
 python tools/run_distributed_eval.py \
   --routes-dir "${ROUTES_DIR}" \

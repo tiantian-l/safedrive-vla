@@ -63,6 +63,9 @@ SPEED_TRACK = os.environ.get("SAFEDRIVE_SPEED_TRACK", "0") == "1"
 # Per-tick timings, driving mode and controller targets in agent_debug.json
 # next to metric_info.json (not part of the submission). Off by default.
 DEBUG_LOG = os.environ.get("SAFEDRIVE_DEBUG_LOG", "0") == "1"
+# Never force the ego to creep forward after it has stood still for
+# ``stuck_threshold`` ticks: the model's brake is always respected. Off by default.
+NO_CREEP = os.environ.get("SAFEDRIVE_NO_CREEP", "0") == "1"
 DEBUG_FLUSH_EVERY = 100
 MAX_LATERAL_ACCEL = 3.0     # m/s^2, caps the tracked speed on curved paths
 MODE_NAMES = {"<STRICT>": "strict", "<CAUTIOUS>": "cautious", "<FALLBACK>": "fallback"}
@@ -142,6 +145,10 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
             raise ValueError(f"SAFEDRIVE_NAV_SIGNAL must be target_point or command, got {self.nav_signal}")
         # Free-form language instruction; set by the language-benchmark agents.
         self.instruction = None
+        # Complete navigation part of the prompt (replacing "Command: <instruction>.
+        # Predict the actions."); set by the language agents when they rewrite
+        # the instruction into a training-time phrasing.
+        self.navigation_override = None
 
         self.model, self.processor, cfg = load_policy(checkpoint, self.device)
         self.tokenizer = self.processor.tokenizer
@@ -273,13 +280,18 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         ego_next_target_point = utils.inverse_conversion_2d(next_target_point[:2], ego_xy, compass)
         target_points = np.array([ego_target_point, ego_next_target_point], dtype=np.float32)
 
-        if self.instruction is not None:
+        if self.navigation_override is not None:
+            navigation = None
+        elif self.instruction is not None:
             navigation = f"Command: {self.instruction}."
         elif self.nav_signal == "command":
             navigation = command_prompt(self.commands[-2], self.next_commands[-2], int(np.linalg.norm(ego_target_point)))
         else:
             navigation = "Target waypoint: <TARGET_POINT><TARGET_POINT>."
-        prompt = f"Current speed: {round(float(speed), 1)} m/s. {navigation} {TASK_PROMPT}"
+        if navigation is None:
+            prompt = f"Current speed: {round(float(speed), 1)} m/s. {self.navigation_override}"
+        else:
+            prompt = f"Current speed: {round(float(speed), 1)} m/s. {navigation} {TASK_PROMPT}"
 
         wm_inputs = None
         if self.wm_enabled:
@@ -379,7 +391,7 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
             self.stuck_detector += 1
         else:
             self.stuck_detector = 0
-        if self.stuck_detector > self.config.stuck_threshold:
+        if self.stuck_detector > self.config.stuck_threshold and not NO_CREEP:
             self.force_move = self.config.creep_duration
         if self.force_move > 0:
             throttle = max(self.config.creep_throttle, throttle)
@@ -397,7 +409,7 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
                 "mode": self.mode, "speed": round(float(tick["speed"]), 3),
                 "model_speed": round(self._model_desired_speed(trajectory), 3),
                 "target_speed": None if target_speed is None else round(float(target_speed), 3),
-                "instruction": self.instruction, "throttle": round(float(throttle), 3), "brake": bool(brake),
+                "instruction": self.instruction, "prompt": self.prompt.split(" Lookahead")[0], "throttle": round(float(throttle), 3), "brake": bool(brake),
             })
         return self.control
 

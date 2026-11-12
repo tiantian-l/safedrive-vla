@@ -28,7 +28,7 @@ import carla
 import py_trees
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 
-from safedrive_vla.constants import META_COMMAND_TO_INDEX
+from safedrive_vla.constants import META_COMMAND_TO_INDEX, TASK_PROMPT
 from team_code.agent_safedrive import SafeDriveAgent
 
 INSTRUCTION_META_COMMANDS = Path(__file__).resolve().parent / "instruction_meta_commands.json"
@@ -38,6 +38,19 @@ COMPLETION_MIN_PROGRESS_M = 3.0
 SCENARIO_ACTIVE_DISTANCE_M = 30.0
 _SPEED_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*m\s*/\s*s", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
+# Rewrite the active instruction into a phrasing seen in training (see
+# SafeDriveLanguageAgent.normalized_navigation). Off by default.
+INSTR_NORM = os.environ.get("SAFEDRIVE_INSTR_NORM", "0") == "1"
+# Meta-command -> route-planner command text of the training prompts
+# (``Command: <text>.``, SimLingo's COMMAND_TEXT without the distance).
+META_COMMAND_TEXT = {
+    "follow_road": "follow the road",
+    "go_straight_intersection": "go straight at the next intersection",
+    "turn_left": "go left at the next intersection",
+    "turn_right": "go right at the next intersection",
+    "lane_change_left": "do a lane change to the left",
+    "lane_change_right": "do a lane change to the right",
+}
 
 
 def get_entry_point():
@@ -72,6 +85,9 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
     # instruction text -> meta-command; text outside the table: no anchor
     META_COMMAND_TABLE = INSTRUCTION_META_COMMANDS
     UNKNOWN_META_COMMAND: Optional[str] = None
+    # Instruction normalization (SAFEDRIVE_INSTR_NORM=1) only for CARLA-F; the
+    # conflict agent keeps the raw text, whose unsafe requests the model must refuse.
+    NORMALIZE_INSTRUCTION = True
 
     def setup(self, path_to_conf_file):
         super().setup(path_to_conf_file)
@@ -198,7 +214,45 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
             self.current_instruction = self._active_instruction(location)
         instr = self.current_instruction
         self.instruction = instr.text.rstrip(". ") if instr is not None else "follow the road"
+        self.navigation_override = self.normalized_navigation() if INSTR_NORM and self.NORMALIZE_INSTRUCTION else None
         return super().tick(input_data)
+
+    def meta_command_name(self) -> Optional[str]:
+        """Meta-command parsed from the active instruction's text (never from the route)."""
+        text = (self.current_instruction.text if self.current_instruction is not None else self.instruction).strip()
+        meta = self.instruction_meta_commands.get(_normalize(text))
+        if meta is None and _SPEED_RE.search(text):
+            meta = "follow_road"
+        return meta if meta is not None else self.UNKNOWN_META_COMMAND
+
+    def normalized_navigation(self) -> Optional[str]:
+        """The active instruction in a training-time phrasing (prompt after
+        "Current speed: v m/s."), built only from the instruction text:
+
+        * a target-speed instruction -> ``Command: follow the road. <Text>.``, the
+          action-dreaming format (navigation sentence + instruction, no task prompt);
+        * any other instruction -> ``Command: <planner text>. Predict the actions.``,
+          the driving format, e.g. "go left at the next intersection" (no distance).
+
+        ``None`` (keep the raw instruction) when the text maps to no meta-command."""
+        meta = self.meta_command_name()
+        if meta is None:
+            return None
+        command = f"Command: {META_COMMAND_TEXT[meta]}."
+        if self.instruction_named_speed() is not None and meta == "follow_road":
+            text = self.instruction[:1].upper() + self.instruction[1:]
+            return f"{command} {text}."
+        return f"{command} {TASK_PROMPT}"
+
+    def instruction_named_speed(self) -> Optional[float]:
+        """Speed named by the active instruction, if it is a target-speed
+        instruction (one with a speed and a duration); independent of
+        TRACK_INSTRUCTION_SPEED."""
+        instr = self.current_instruction
+        if instr is None or instr.duration_meters <= 0:
+            return None
+        match = _SPEED_RE.search(instr.text)
+        return float(match.group(1)) if match else None
 
     def instruction_target_speed(self):
         """Target speed parsed from the text of the active instruction, if it is
@@ -211,10 +265,5 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
 
     def anchor_meta_command(self) -> int:
         """Meta-command parsed from the instruction text."""
-        text = (self.current_instruction.text if self.current_instruction is not None else self.instruction).strip()
-        meta = self.instruction_meta_commands.get(_normalize(text))
-        if meta is None and _SPEED_RE.search(text):
-            meta = "follow_road"
-        if meta is None:
-            meta = self.UNKNOWN_META_COMMAND
+        meta = self.meta_command_name()
         return META_COMMAND_TO_INDEX[meta] if meta is not None else -1
