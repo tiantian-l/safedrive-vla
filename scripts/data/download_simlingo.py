@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Download the SimLingo training split (RenzKa/simlingo) one archive at a time.
 
-For every ``data_*`` / ``dreamer_*`` archive whose name contains the split
-(default ``routes_training``) the script downloads it, extracts it into
+For every ``data_*`` / ``dreamer_*`` archive whose name contains one of
+``--split`` (default: ``routes_training`` and the Town12 ``training_parking_lane``) the script downloads it, extracts it into
 ``--root`` (skipping ``lidar/``: the challenge is camera-only and the data
 loader never reads it), records it in ``<root>/.done`` and deletes the
 archive. Re-running resumes: finished archives are skipped and an interrupted
@@ -61,8 +61,9 @@ def group_name(path):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--root", required=True, help="data_root, e.g. database/simlingo")
-    p.add_argument("--split", default="routes_training",
-                   help="substring an archive name must contain")
+    p.add_argument("--split", nargs="+",
+                   default=["routes_training", "training_parking_lane"],
+                   help="an archive is selected if its name contains any of these")
     p.add_argument("--max-used-gb", type=float, default=900)
     p.add_argument("--project-id", default="60762")
     p.add_argument("--mount", default="/projects")
@@ -79,7 +80,7 @@ def main():
     api = HfApi()
     files = list_files(api)
     archives = sorted(f for f in files
-                      if f.endswith(".tar.gz") and args.split in f
+                      if f.endswith(".tar.gz") and any(s in f for s in args.split)
                       and (f.startswith("data_") or f.startswith("dreamer_")))
     want = archives + (["buckets_paths.pkl"] if "buckets_paths.pkl" in files else [])
     total = sum(files[f] for f in want) / 1e9
@@ -94,7 +95,7 @@ def main():
         for name in sorted(groups):
             n, size = groups[name]
             print(f"{n:8d} {size / 1e9:8.1f}  {name}")
-        print(f"\nselected: {len(want)} files, {total:.1f} GB (split '{args.split}')")
+        print(f"\nselected: {len(want)} files, {total:.1f} GB (split {args.split})")
         others = defaultdict(float)
         for f, s in files.items():
             if f.endswith(".tar.gz") and f not in archives:
