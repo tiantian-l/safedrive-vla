@@ -325,6 +325,7 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         state = np.array([speed_cur, (speed_cur - speed_prev) / dt, speed_cur * yaw_rate, yaw_rate], dtype=np.float32)
 
         meta_command = self.anchor_meta_command() if self.wm_action_input == "action_anchor" else -1
+        self.wm_meta_command = meta_command
         if meta_command >= 0:
             actions = self.action_anchors[meta_command].copy()
         else:
@@ -404,6 +405,10 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
                 "mode": self.mode, "speed": round(float(tick["speed"]), 3),
                 "model_speed": round(self._model_desired_speed(trajectory), 3),
                 "instruction": self.instruction, "prompt": self.prompt.split(" Lookahead")[0], "throttle": round(float(throttle), 3), "brake": bool(brake),
+                # raw generated answer (mode, <ACTIONS>, action tokens) and the
+                # world-model anchor meta-command index (-1: extrapolated motion)
+                "answer": answer.replace(self.tokenizer.pad_token or "\0", "").strip(),
+                "wm_meta_command": getattr(self, "wm_meta_command", None),
                 # ego frame, x forward, y right (m): path head (None without <ACTIONS>)
                 # and the action-token trajectory, for the junction diagnosis
                 "path": None if path is None else np.round(np.asarray(path, dtype=np.float64)[:, :2], 2).tolist(),
