@@ -11,7 +11,7 @@
 #   --routes-dir DIR            route files to evaluate (default: benchmark/data/<benchmark>)
 #   --output-dir DIR            default: work_dirs/eval/<benchmark>/<experiment>
 #   --save-viz                  save front-camera images with the predictions
-#   --debug-log                 write agent_debug.json (timings, mode, speeds, prompt) per route
+#   --debug-log                 write agent_debug.json (timings, mode, speeds, prompt, path, trajectory) per route
 #   --instr-norm                CARLA-F: rewrite the instruction into a training-time prompt
 #                               phrasing built from its parsed meta-command (SAFEDRIVE_INSTR_NORM)
 #   --no-creep                  never force the ego to creep after standing still for

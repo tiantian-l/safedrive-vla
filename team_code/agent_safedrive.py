@@ -404,6 +404,10 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
                 "mode": self.mode, "speed": round(float(tick["speed"]), 3),
                 "model_speed": round(self._model_desired_speed(trajectory), 3),
                 "instruction": self.instruction, "prompt": self.prompt.split(" Lookahead")[0], "throttle": round(float(throttle), 3), "brake": bool(brake),
+                # ego frame, x forward, y right (m): path head (None without <ACTIONS>)
+                # and the action-token trajectory, for the junction diagnosis
+                "path": None if path is None else np.round(np.asarray(path, dtype=np.float64)[:, :2], 2).tolist(),
+                "trajectory": np.round(np.asarray(trajectory, dtype=np.float64)[:, :2], 2).tolist(),
             })
         return self.control
 
