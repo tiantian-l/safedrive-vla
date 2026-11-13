@@ -57,17 +57,13 @@ from team_code.nav_planner import LateralPIDController, RoutePlanner
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SAVE_VIZ = os.environ.get("SAFEDRIVE_SAVE_VIZ", "0") == "1"
-# Track the target speed parsed from the instruction text (language agents only;
-# see SafeDriveLanguageAgent.instruction_target_speed). Off by default.
-SPEED_TRACK = os.environ.get("SAFEDRIVE_SPEED_TRACK", "0") == "1"
-# Per-tick timings, driving mode and controller targets in agent_debug.json
+# Per-tick timings, driving mode, speeds and predictions in agent_debug.json
 # next to metric_info.json (not part of the submission). Off by default.
 DEBUG_LOG = os.environ.get("SAFEDRIVE_DEBUG_LOG", "0") == "1"
 # Never force the ego to creep forward after it has stood still for
 # ``stuck_threshold`` ticks: the model's brake is always respected. Off by default.
 NO_CREEP = os.environ.get("SAFEDRIVE_NO_CREEP", "0") == "1"
 DEBUG_FLUSH_EVERY = 100
-MAX_LATERAL_ACCEL = 3.0     # m/s^2, caps the tracked speed on curved paths
 MODE_NAMES = {"<STRICT>": "strict", "<CAUTIOUS>": "cautious", "<FALLBACK>": "fallback"}
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -381,8 +377,7 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         trajectory = self.action_tokenizer.rollout_xy(indices)
         steer_points = path if path is not None else trajectory
         velocity = torch.tensor([tick["speed"]], dtype=torch.float32)
-        target_speed = self.tracked_speed(steer_points) if SPEED_TRACK else None
-        steer, throttle, brake = self.control_pid(steer_points, velocity[0].numpy(), trajectory, target_speed)
+        steer, throttle, brake = self.control_pid(steer_points, velocity[0].numpy(), trajectory)
 
         if SAVE_VIZ and self.step % 5 == 0:
             self._save_image(tick["target_points"], trajectory, path, answer)
@@ -408,44 +403,9 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
                 "t_log": round(time.perf_counter() - t_ctrl, 4), "new_tokens": int(generated.shape[1] - prompt_len),
                 "mode": self.mode, "speed": round(float(tick["speed"]), 3),
                 "model_speed": round(self._model_desired_speed(trajectory), 3),
-                "target_speed": None if target_speed is None else round(float(target_speed), 3),
                 "instruction": self.instruction, "prompt": self.prompt.split(" Lookahead")[0], "throttle": round(float(throttle), 3), "brake": bool(brake),
             })
         return self.control
-
-    # ------------------------------------------------------------------
-    # instruction speed tracking
-    # ------------------------------------------------------------------
-    def instruction_target_speed(self):
-        """Target speed (m/s) of the active instruction, parsed from its text;
-        None when no speed instruction is active. The base agent has none."""
-        return None
-
-    def tracked_speed(self, path: np.ndarray):
-        """Speed the longitudinal controller tracks instead of the action-token
-        speed: the instruction's target speed while the model drives in strict
-        mode, capped by the lateral acceleration on the predicted path. The
-        model's own speed is kept whenever it is cautious or falls back."""
-        target = self.instruction_target_speed()
-        if target is None or self.mode != "strict":
-            return None
-        curvature = self._path_curvature(path)
-        if curvature > 1e-4:
-            target = min(target, math.sqrt(MAX_LATERAL_ACCEL / curvature))
-        return float(target)
-
-    @staticmethod
-    def _path_curvature(path: np.ndarray) -> float:
-        """Curvature (1/m) of the predicted path from a least-squares parabola
-        y = a x^2 + b x through the ego origin (ego frame, x forward). A fit over
-        all points is robust to centimetre jitter, which three-point estimates
-        read as tight curves; on real curves it errs on the high side."""
-        p = np.asarray(path, dtype=np.float64)[:, :2]
-        x, y = p[:, 0], p[:, 1]
-        if len(p) < 3 or np.ptp(x) < 5.0:
-            return 0.0
-        (a, b), *_ = np.linalg.lstsq(np.stack([x * x, x], axis=1), y, rcond=None)
-        return float(abs(2.0 * a) / (1.0 + b * b) ** 1.5)
 
     @staticmethod
     def _model_desired_speed(trajectory: np.ndarray) -> float:
@@ -461,11 +421,10 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         path, _ = self.model.predict_path(generated, hidden.to(self.model.path_head.mlp[0].weight.dtype))
         return path[0].float().cpu().numpy()
 
-    def control_pid(self, path: np.ndarray, speed: np.ndarray, trajectory: np.ndarray, target_speed=None):
+    def control_pid(self, path: np.ndarray, speed: np.ndarray, trajectory: np.ndarray):
         """Lateral PID along ``path``; longitudinal PID towards the speed of the
-        action-token ``trajectory`` between 0.5 s and 1.0 s, or towards
-        ``target_speed`` when given (instruction speed tracking)."""
-        desired_speed = self._model_desired_speed(trajectory) if target_speed is None else float(target_speed)
+        action-token ``trajectory`` between 0.5 s and 1.0 s."""
+        desired_speed = self._model_desired_speed(trajectory)
         brake = desired_speed < self.config.brake_speed or (speed / max(float(desired_speed), 1e-4)) > self.config.brake_ratio
         delta = np.clip(desired_speed - speed, 0.0, self.config.clip_delta)
         throttle = np.clip(self.speed_controller.step(delta), 0.0, self.config.clip_throttle)

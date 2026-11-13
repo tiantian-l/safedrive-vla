@@ -26,7 +26,6 @@ def get_entry_point():
 
 class SafeDriveConflictAgent(SafeDriveLanguageAgent):
     COMPLETION_MONITOR = False
-    TRACK_INSTRUCTION_SPEED = False
     META_COMMAND_TABLE = Path(__file__).resolve().parent / "conflict_instruction_meta_commands.json"
     UNKNOWN_META_COMMAND = "follow_road"
     NORMALIZE_INSTRUCTION = False
