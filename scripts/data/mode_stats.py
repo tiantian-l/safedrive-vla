@@ -44,6 +44,7 @@ import yaml
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from safedrive_vla.constants import COMMAND_TO_META_COMMAND  # noqa: E402
 from safedrive_vla.data.driving_mode import (  # noqa: E402
+    ACCEL_STRICT, CRUISE_SPEED, HORIZON_S, LATERAL_DEPARTURE_M, WAYPOINT_DT,
     classify_driving_mode, classify_speed_instruction)
 
 # --- copied from safedrive_vla/data/simlingo_base.py -------------------------
@@ -133,6 +134,16 @@ def dream_label(option, current, waypoints, safe):
     return meta_name, mode
 
 
+def cruise_reasons(wp, speed):
+    """Why a follow_road / go-straight frame is not STRICT (same tests as classify_cruise)."""
+    wp = np.asarray(wp, dtype=np.float32).reshape(-1, 2)
+    pts = np.vstack([np.zeros((1, 2), dtype=np.float32), wp])
+    sp = np.linalg.norm(np.diff(pts, axis=0), axis=1) / WAYPOINT_DT
+    accel = (float(sp[-2:].mean()) - speed) / HORIZON_S
+    return dict(slow=speed < CRUISE_SPEED, braking=accel < ACCEL_STRICT,
+                lateral=float(np.abs(wp[:, 1]).max()) > LATERAL_DEPARTURE_M)
+
+
 # --- indexing -------------------------------------------------------------------
 def index_routes(root: str):
     """(driving_routes, dreaming_routes) with frame lists, like SimLingoBase.__init__."""
@@ -216,6 +227,13 @@ def label(job):
             meta = COMMAND_TO_META_COMMAND.get(int(cur.get("command", 0)))
             mode = classify_driving_mode(wp, meta, speed, float(cur.get("speed_limit", 0.0))) if meta else None
             rec.update(meta=meta, mode=mode, cat="expert", safe=True)
+            # Part 3: the same frame labelled from the un-augmented expert trajectory
+            wp_org = np.array(get_waypoints(meas)[1:-1])
+            rec.update(shifted=shifted, y_aug=float(y_aug), yaw_aug=float(yaw_aug),
+                       mode_org=classify_driving_mode(wp_org, meta, speed, float(cur.get("speed_limit", 0.0))) if meta else None)
+            if meta in ("follow_road", "go_straight_intersection"):
+                rec["why"] = cruise_reasons(wp, speed)
+                rec["why_org"] = cruise_reasons(wp_org, speed)
         else:
             wp_org = np.array(get_waypoints(meas)[1:-1])
             with gzip.open(to_dreamer(root, f"{route}/dreamer/{start:04}.json.gz"), "rt") as f:
@@ -246,6 +264,38 @@ def pct_table(recs, key, title):
         n = sum(c.values())
         cells = " ".join(f"{100 * c[m] / n:{w}.1f}" for m, w in zip(MODES, (7, 8, 8, 5)))
         print(f"  {str(g):38s} {n:6d} {100 * n / total:5.1f}% | {cells}")
+
+
+def part3(rk):
+    """Is CAUTIOUS on straight / follow-road frames caused by the shifted-camera augmentation?"""
+    print("\n== Part 3: CAUTIOUS on follow_road / go_straight driving frames ==")
+    cr = [r for r in rk if r.get("meta") in ("follow_road", "go_straight_intersection")]
+    if not cr:
+        print("  no samples"); return
+    for name, grp in (("shifted camera", [r for r in cr if r["shifted"]]), ("original camera", [r for r in cr if not r["shifted"]])):
+        n = len(grp) or 1
+        c = collections.Counter(r["mode"] for r in grp)
+        print(f"  {name:16s} n={len(grp):5d}: " + ", ".join(f"{m} {100 * c[m] / n:.1f}%" for m in MODES[:3]))
+    sh = [r for r in cr if r["shifted"]]
+    sc = [r for r in sh if r["mode"] == "cautious"]
+    if sc:
+        t = collections.Counter(r["mode_org"] for r in sc)
+        print(f"  shifted & CAUTIOUS: {len(sc)}; labelled from the un-augmented trajectory they would be: "
+              + ", ".join(f"{m} {100 * t[m] / len(sc):.1f}%" for m in MODES[:3]))
+    for name, key, grp in (("CAUTIOUS (as trained)", "why", [r for r in cr if r["mode"] == "cautious"]),
+                           ("CAUTIOUS, original camera only", "why", [r for r in cr if r["mode"] == "cautious" and not r["shifted"]]),
+                           ("CAUTIOUS, shifted camera only", "why", sc)):
+        n = len(grp) or 1
+        cnt = collections.Counter()
+        for r in grp:
+            w = r[key]
+            cnt["slow (<6 m/s)"] += w["slow"]; cnt["braking (<-0.5 m/s2)"] += w["braking"]; cnt["lateral (>1.5 m)"] += w["lateral"]
+            cnt["lateral ONLY (fast, not braking)"] += w["lateral"] and not w["slow"] and not w["braking"]
+        print(f"  reasons, {name} (n={len(grp)}; a frame can have several): "
+              + ", ".join(f"{k} {100 * v / n:.1f}%" for k, v in cnt.items()))
+    for key, lab in (("y_aug", "|translation| m"), ("yaw_aug", "|rotation| deg")):
+        v = np.abs(np.array([r[key] for r in sh])) if sh else np.zeros(1)
+        print(f"  shifted frames {lab}: median {np.median(v):.2f}, p90 {np.percentile(v, 90):.2f}, max {v.max():.2f}")
 
 
 def main():
@@ -345,6 +395,7 @@ def main():
             print(f"  stopped now (<1 m/s): {len(stopped)} ({100 * len(stopped) / len(rk):.1f}%), "
                   f"of which start moving within 2.5 s: {sm} ({100 * sm / len(stopped):.1f}%); modes "
                   + ", ".join(f"{m} {cs[m]}" for m in MODES if cs[m]))
+    part3([r for r in recs if r["kind"] == "driving"])
     print(f"\ndone in {time.time() - t0:.0f}s")
 
 
