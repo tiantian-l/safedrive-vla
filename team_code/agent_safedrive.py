@@ -63,6 +63,12 @@ DEBUG_LOG = os.environ.get("SAFEDRIVE_DEBUG_LOG", "0") == "1"
 # Never force the ego to creep forward after it has stood still for
 # ``stuck_threshold`` ticks: the model's brake is always respected. Off by default.
 NO_CREEP = os.environ.get("SAFEDRIVE_NO_CREEP", "0") == "1"
+# Diagnostic: fix the driving-mode token before decoding (the rest of the answer is
+# decoded as usual). "" = off (default); "strict_nav" (CARLA-F: <STRICT> while a
+# straight / lane-follow instruction is active); "oracle" / "oracle_full"
+# (privileged simulator hazards -> <FALLBACK> / <CAUTIOUS>, DIAGNOSTIC ONLY: they read
+# the simulator state and must never be used for a submission). See forced_mode_token().
+FORCE_MODE = os.environ.get("SAFEDRIVE_FORCE_MODE", "")
 DEBUG_FLUSH_EVERY = 100
 MODE_NAMES = {"<STRICT>": "strict", "<CAUTIOUS>": "cautious", "<FALLBACK>": "fallback"}
 
@@ -356,8 +362,18 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         if tick["wm_inputs"] is not None:
             wm = [torch.from_numpy(x).to(self.device).unsqueeze(0) for x in tick["wm_inputs"]]
         self.model.set_conditioning(target_points=target_points, wm_tubelet=wm[0], wm_state=wm[1], wm_actions=wm[2])
+        prompt_len = inputs["input_ids"].shape[1]
+        forced = self.forced_mode_token() if FORCE_MODE else None
+        gen_inputs = inputs
+        if forced is not None:
+            # Teacher-force the mode token: append it to the prompt, so the
+            # decoded sequence (prompt + answer) starts its answer with it.
+            forced_id = torch.tensor([[int(self.tokenizer.convert_tokens_to_ids(forced))]], device=self.device)
+            gen_inputs = dict(inputs)
+            gen_inputs["input_ids"] = torch.cat([inputs["input_ids"], forced_id], dim=1)
+            gen_inputs["attention_mask"] = torch.cat([inputs["attention_mask"], torch.ones_like(forced_id)], dim=1)
         try:
-            generated = self.model.vlm.generate(**inputs, do_sample=False, max_new_tokens=self.config.max_new_tokens,
+            generated = self.model.vlm.generate(**gen_inputs, do_sample=False, max_new_tokens=self.config.max_new_tokens,
                                                 pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id)
             if DEBUG_LOG:
                 torch.cuda.synchronize()
@@ -369,7 +385,7 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         finally:
             self.model.clear_conditioning()
 
-        prompt_len = inputs["input_ids"].shape[1]
+        self.last_path = path
         answer = self.tokenizer.decode(generated[0, prompt_len:], skip_special_tokens=False)
         self.mode = next((name for token, name in MODE_NAMES.items() if token in answer), None)
         indices = [t - self.model.action_start_id for t in generated[0, prompt_len:].tolist()
@@ -409,12 +425,19 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
                 # world-model anchor meta-command index (-1: extrapolated motion)
                 "answer": answer.replace(self.tokenizer.pad_token or "\0", "").strip(),
                 "wm_meta_command": getattr(self, "wm_meta_command", None),
+                # --force-mode diagnostics: the forced mode token (None = model's own) and
+                # the oracle hazard that chose it
+                "forced_mode": forced, "hazard": getattr(self, "oracle_hazard", None),
                 # ego frame, x forward, y right (m): path head (None without <ACTIONS>)
                 # and the action-token trajectory, for the junction diagnosis
                 "path": None if path is None else np.round(np.asarray(path, dtype=np.float64)[:, :2], 2).tolist(),
                 "trajectory": np.round(np.asarray(trajectory, dtype=np.float64)[:, :2], 2).tolist(),
             })
         return self.control
+
+    def forced_mode_token(self):
+        """Mode token to teacher-force this tick (None: let the model decode it)."""
+        return None
 
     @staticmethod
     def _model_desired_speed(trajectory: np.ndarray) -> float:

@@ -16,6 +16,9 @@
 #                               phrasing built from its parsed meta-command (SAFEDRIVE_INSTR_NORM)
 #   --no-creep                  never force the ego to creep after standing still for
 #                               stuck_threshold ticks (SAFEDRIVE_NO_CREEP)
+#   --force-mode NAME           DIAGNOSTIC: teacher-force the driving-mode token (SAFEDRIVE_FORCE_MODE):
+#                               strict_nav (CARLA-F: <STRICT> during straight / lane-follow instructions),
+#                               oracle | oracle_full (privileged simulator hazards; NEVER for a submission)
 #   --route-walltime S          kill and retry a route after S wall-clock seconds (default 14400).
 #                               B2D-C routes where the ego waits can need hours when several
 #                               routes share a GPU; 3600 s killed them over and over.
@@ -35,6 +38,7 @@ export SAFEDRIVE_SAVE_VIZ="0"
 export SAFEDRIVE_DEBUG_LOG="${SAFEDRIVE_DEBUG_LOG:-0}"
 export SAFEDRIVE_INSTR_NORM="${SAFEDRIVE_INSTR_NORM:-0}"
 export SAFEDRIVE_NO_CREEP="${SAFEDRIVE_NO_CREEP:-0}"
+export SAFEDRIVE_FORCE_MODE="${SAFEDRIVE_FORCE_MODE:-}"
 ROUTE_WALLTIME=14400
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -46,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --debug-log)  SAFEDRIVE_DEBUG_LOG="1"; shift ;;
     --instr-norm) SAFEDRIVE_INSTR_NORM="1"; shift ;;
     --no-creep)   SAFEDRIVE_NO_CREEP="1"; shift ;;
+    --force-mode) SAFEDRIVE_FORCE_MODE="$2"; shift 2 ;;
     --route-walltime) ROUTE_WALLTIME="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
@@ -75,7 +80,7 @@ if [[ -z "${OUTPUT_DIR}" ]]; then
 fi
 export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"
 export TOKENIZERS_PARALLELISM=false
-echo "debug_log=${SAFEDRIVE_DEBUG_LOG} instr_norm=${SAFEDRIVE_INSTR_NORM} no_creep=${SAFEDRIVE_NO_CREEP} save_viz=${SAFEDRIVE_SAVE_VIZ}"
+echo "debug_log=${SAFEDRIVE_DEBUG_LOG} instr_norm=${SAFEDRIVE_INSTR_NORM} no_creep=${SAFEDRIVE_NO_CREEP} force_mode=${SAFEDRIVE_FORCE_MODE:-off} save_viz=${SAFEDRIVE_SAVE_VIZ}"
 
 python tools/run_distributed_eval.py \
   --routes-dir "${ROUTES_DIR}" \

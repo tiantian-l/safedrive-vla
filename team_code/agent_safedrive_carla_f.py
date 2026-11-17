@@ -29,13 +29,19 @@ import py_trees
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 
 from safedrive_vla.constants import META_COMMAND_TO_INDEX, TASK_PROMPT
-from team_code.agent_safedrive import SafeDriveAgent
+from team_code.agent_safedrive import FORCE_MODE, SafeDriveAgent
 
 INSTRUCTION_META_COMMANDS = Path(__file__).resolve().parent / "instruction_meta_commands.json"
 NAVIGATION_COMMANDS = {1, 2, 3, 5, 6}   # route-planner commands of maneuver instructions
 LANE_FOLLOW_COMMAND = 4
 COMPLETION_MIN_PROGRESS_M = 3.0
 SCENARIO_ACTIVE_DISTANCE_M = 30.0
+# --force-mode oracle (DIAGNOSTIC ONLY, reads the simulator state): an actor is a
+# hazard if it is, now or along a constant-velocity prediction, within this
+# distance of the ego's last path-head path.
+ORACLE_HORIZON_S = (0.0, 0.5, 1.0, 1.5, 2.0)
+ORACLE_RADIUS_M = {"vehicle": 2.0, "walker": 1.5}
+ORACLE_RANGE_M = 40.0
 _SPEED_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*m\s*/\s*s", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
 # Rewrite the active instruction into a phrasing seen in training (see
@@ -248,6 +254,90 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
             return None
         match = _SPEED_RE.search(instr.text)
         return float(match.group(1)) if match else None
+
+    # ------------------------------------------------------------------
+    # --force-mode (diagnostic)
+    # ------------------------------------------------------------------
+    def forced_mode_token(self) -> Optional[str]:
+        """strict_nav: <STRICT> while a straight / lane-follow instruction (no
+        target speed) is active; built from the instruction text only.
+        oracle: <FALLBACK> for a red light or a crossing / oncoming actor on the
+        ego's path, <CAUTIOUS> for a lead vehicle or a standing obstacle on it,
+        otherwise the model's own mode; oracle_full: <STRICT> when nothing is
+        in the way. The oracles read privileged simulator state: diagnostics
+        only, never for a submission."""
+        self.oracle_hazard = None
+        if FORCE_MODE == "strict_nav":
+            instr = self.current_instruction
+            if instr is None or _SPEED_RE.search(instr.text):
+                return None
+            return "<STRICT>" if self.meta_command_name() in ("follow_road", "go_straight_intersection") else None
+        if FORCE_MODE in ("oracle", "oracle_full"):
+            self.oracle_hazard = self._oracle_hazard()
+            if self.oracle_hazard in ("red_light", "crossing"):
+                return "<FALLBACK>"
+            if self.oracle_hazard in ("lead", "static"):
+                return "<CAUTIOUS>"
+            return "<STRICT>" if FORCE_MODE == "oracle_full" else None
+        if FORCE_MODE:
+            raise ValueError(f"Unknown SAFEDRIVE_FORCE_MODE: {FORCE_MODE}")
+        return None
+
+    def _oracle_hazard(self) -> Optional[str]:
+        """Privileged hazard on the ego's path (diagnostic only): red_light |
+        crossing (a moving actor not driving ahead of us in our direction) |
+        lead (a vehicle ahead moving our way) | static (a standing actor) | None."""
+        if self._hero is None or self._ego_location() is None:
+            return None
+        hero = self._hero
+        try:
+            if hero.is_at_traffic_light() and hero.get_traffic_light_state() == carla.TrafficLightState.Red:
+                return "red_light"
+        except RuntimeError:
+            pass
+        path = getattr(self, "last_path", None)
+        path = [(float(p[0]), float(p[1])) for p in path] if path is not None else [(float(x), 0.0) for x in range(1, 21)]
+        path = [(0.0, 0.0)] + path
+        tf = hero.get_transform()
+        ego, fwd, right = tf.location, tf.get_forward_vector(), tf.get_right_vector()
+
+        def to_ego(v):  # world vector -> (forward, right)
+            return v.x * fwd.x + v.y * fwd.y, v.x * right.x + v.y * right.y
+
+        def dist_to_path(px, py):
+            best = float("inf")
+            for (ax, ay), (bx, by) in zip(path, path[1:]):
+                dx, dy = bx - ax, by - ay
+                t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / max(dx * dx + dy * dy, 1e-9)))
+                best = min(best, math.hypot(px - ax - t * dx, py - ay - t * dy))
+            return best
+
+        found = set()
+        world = CarlaDataProvider.get_world()
+        for actor in list(world.get_actors().filter("vehicle.*")) + list(world.get_actors().filter("walker.*")):
+            if actor.id == hero.id:
+                continue
+            loc = actor.get_location()
+            if loc is None or loc.z < -10.0 or loc.distance(ego) > ORACLE_RANGE_M:
+                continue
+            x, y = to_ego(loc - ego)
+            if x < -1.0 and actor.type_id.startswith("vehicle"):
+                continue  # behind the ego: not ours to yield to
+            vx, vy = to_ego(actor.get_velocity())
+            radius = ORACLE_RADIUS_M["walker" if actor.type_id.startswith("walker") else "vehicle"]
+            if not any(dist_to_path(x + vx * t, y + vy * t) < radius for t in ORACLE_HORIZON_S):
+                continue
+            speed = math.hypot(vx, vy)
+            if speed < 0.5:
+                found.add("static")
+            elif x > 0 and vx > 2.0 and abs(vy) < 1.0 and actor.type_id.startswith("vehicle"):
+                found.add("lead")
+            else:
+                found.add("crossing")
+        for kind in ("crossing", "lead", "static"):
+            if kind in found:
+                return kind
+        return None
 
     def anchor_meta_command(self) -> int:
         """Meta-command parsed from the instruction text."""
