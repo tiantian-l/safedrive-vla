@@ -144,6 +144,32 @@ def cruise_reasons(wp, speed):
                 lateral=float(np.abs(wp[:, 1]).max()) > LATERAL_DEPARTURE_M)
 
 
+def route_geometry(route, wp):
+    """Split a lateral departure into 'the road itself bends' vs 'the expert left the route line'.
+    route: current['route'] (ego frame, the planned lane centre ahead); wp: un-augmented expert waypoints.
+    Returns (road_lat, off_route): road_lat = largest |y| of the route within the distance the expert drove
+    (> 1.5 m = a curve the expert simply followed); off_route = largest distance of a waypoint to the route
+    polyline (> 1.0 m = swerve / lane change / leaving the route)."""
+    r = np.asarray(route, dtype=np.float32).reshape(-1, 2)
+    wp = np.asarray(wp, dtype=np.float32).reshape(-1, 2)
+    if r.shape[0] < 2:
+        return float("nan"), float("nan")
+    seg = np.linalg.norm(np.diff(r, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    driven = float(np.linalg.norm(np.diff(np.vstack([np.zeros((1, 2)), wp]), axis=0), axis=1).sum())
+    road_lat = float(np.abs(r[cum <= max(driven, 1.0), 1]).max())
+    a, b = r[:-1], r[1:]
+    d = b - a
+    l2 = np.maximum((d ** 2).sum(1), 1e-9)
+    dist = []
+    for q in wp:
+        if q[0] > r[-1, 0] + 1.0:  # beyond the stored route: cannot judge
+            continue
+        t = np.clip(((q - a) * d).sum(1) / l2, 0, 1)
+        dist.append(float(np.min(np.linalg.norm(a + t[:, None] * d - q, axis=1))))
+    return road_lat, (max(dist) if dist else float("nan"))
+
+
 # --- indexing -------------------------------------------------------------------
 def index_routes(root: str):
     """(driving_routes, dreaming_routes) with frame lists, like SimLingoBase.__init__."""
@@ -234,6 +260,10 @@ def label(job):
             if meta in ("follow_road", "go_straight_intersection"):
                 rec["why"] = cruise_reasons(wp, speed)
                 rec["why_org"] = cruise_reasons(wp_org, speed)
+                if "route" in cur:
+                    rec["road_lat"], rec["off_route"] = route_geometry(cur["route"], wp_org)
+            if seed % 997 == 0:
+                rec["mkeys"] = sorted(cur.keys())
         else:
             wp_org = np.array(get_waypoints(meas)[1:-1])
             with gzip.open(to_dreamer(root, f"{route}/dreamer/{start:04}.json.gz"), "rt") as f:
@@ -293,6 +323,17 @@ def part3(rk):
             cnt["lateral ONLY (fast, not braking)"] += w["lateral"] and not w["slow"] and not w["braking"]
         print(f"  reasons, {name} (n={len(grp)}; a frame can have several): "
               + ", ".join(f"{k} {100 * v / n:.1f}%" for k, v in cnt.items()))
+    lat = [r for r in cr if r["mode"] == "cautious" and r["why_org"]["lateral"] and not r["why_org"]["slow"]
+           and not r["why_org"]["braking"] and "road_lat" in r]
+    if lat:
+        curve = sum(1 for r in lat if r["road_lat"] > 1.5 and not r["off_route"] > 1.0)
+        off = sum(1 for r in lat if r["off_route"] > 1.0)
+        print(f"  CAUTIOUS only because of lateral departure (un-augmented trajectory, fast, not braking): n={len(lat)}; "
+              f"road itself curves and expert stays on route {100 * curve / len(lat):.1f}%, "
+              f"expert leaves the route line (>1 m) {100 * off / len(lat):.1f}%, other {100 * (len(lat) - curve - off) / len(lat):.1f}%")
+    keys = sorted({k for r in rk for k in r.get("mkeys", [])})
+    if keys:
+        print("  measurement keys (for smarter labels, e.g. hazard flags):", ", ".join(keys))
     for key, lab in (("y_aug", "|translation| m"), ("yaw_aug", "|rotation| deg")):
         v = np.abs(np.array([r[key] for r in sh])) if sh else np.zeros(1)
         print(f"  shifted frames {lab}: median {np.median(v):.2f}, p90 {np.percentile(v, 90):.2f}, max {v.max():.2f}")
