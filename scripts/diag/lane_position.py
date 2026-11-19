@@ -134,7 +134,7 @@ def part_train(a, maps):
             em = me["ego_matrix"]; f = features(cmap, em[0][3], em[1][3], em[2][3])
             if f is None or f["in_junction"]: continue
             key = (cmd, Path(r).name)
-            rec = dict(town=m.group(0), route=Path(r).name, cmd=cmd, **f)
+            rec = dict(town=m.group(0), route=Path(r).name, route_dir=r, frame=int(Path(fpath).name.split(".")[0]), cmd=cmd, **f)
             if key == prev_key: approaches[-1] = rec  # same approach: keep the frame closest to the junction
             else: approaches.append(rec)
             prev_key = key
