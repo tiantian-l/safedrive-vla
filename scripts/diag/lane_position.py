@@ -40,18 +40,27 @@ def same_dir_lanes(wp):
 
 
 def manoeuvres(wp):
-    """Turn directions reachable from this lane through the next junction: subset of L/S/R."""
-    w, steps = wp, 0
-    while not w.is_junction and steps < 40:
+    """Turn directions reachable from this lane through the next junction: subset of L/S/R.
+    Walk along the lane to the last waypoint before the junction; its next() returns one waypoint per
+    connecting lane into the junction; follow each to the junction exit and compare headings."""
+    w = wp
+    for _ in range(40):
         nx = w.next(2.0)
         if not nx: return ""
-        w, steps = nx[0], steps + 1
-    if not w.is_junction: return ""
-    y0, out = wp.transform.rotation.yaw, set()
-    for start in w.next(1.0) + [w]:
-        for e in start.next(30.0) or []:
-            d = wrap(e.transform.rotation.yaw - y0)
-            out.add("L" if d < -30 else "R" if d > 30 else "S")
+        if any(n.is_junction for n in nx): break
+        w = nx[0]
+    else:
+        return ""
+    y0, out = w.transform.rotation.yaw, set()
+    for b in nx:
+        e = b
+        for _ in range(60):  # through the junction
+            if not e.is_junction: break
+            n2 = e.next(2.0)
+            if not n2: break
+            e = n2[0]
+        d = wrap(e.transform.rotation.yaw - y0)
+        out.add("L" if d < -30 else "R" if d > 30 else "S")
     return "".join(sorted(out))
 
 
