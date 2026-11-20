@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import time
 from collections import deque
 from pathlib import Path
@@ -69,6 +70,12 @@ NO_CREEP = os.environ.get("SAFEDRIVE_NO_CREEP", "0") == "1"
 # (privileged simulator hazards -> <FALLBACK> / <CAUTIOUS>, DIAGNOSTIC ONLY: they read
 # the simulator state and must never be used for a submission). See forced_mode_token().
 FORCE_MODE = os.environ.get("SAFEDRIVE_FORCE_MODE", "")
+# Diagnostic (E9): every 5th tick while a non-speed instruction is active, save the exact
+# model inputs (VLA image after JPEG + bonnet crop, world-model tubelet / state / actions,
+# anchor index, prompt, target points) to <save_dir>/dump/<step>.npz for the offline probe
+# (scripts/diag/probe.py). Not part of the submission. Off by default.
+DUMP = os.environ.get("SAFEDRIVE_DUMP", "0") == "1"
+_DUMP_SPEED_RE = re.compile(r"\d+(?:\.\d+)?\s*m\s*/\s*s", re.IGNORECASE)
 DEBUG_FLUSH_EVERY = 100
 MODE_NAMES = {"<STRICT>": "strict", "<CAUTIOUS>": "cautious", "<FALLBACK>": "fallback"}
 
@@ -205,6 +212,8 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         self.mode = None
         if SAVE_VIZ:
             (self.save_dir / "images").mkdir(exist_ok=True)
+        if DUMP:
+            (self.save_dir / "dump").mkdir(exist_ok=True)
 
     def _init(self):
         # GPS reference of the CARLA map, from the first route point.
@@ -259,6 +268,7 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         _, jpg = cv2.imencode(".jpg", camera)
         frame = cv2.cvtColor(cv2.imdecode(jpg, cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB)
         vla_image = frame[: int(frame.shape[0] - (frame.shape[0] * 4.8) // 16)]  # remove the bonnet
+        self.vla_image = vla_image
 
         gps = self._route_planner.convert_gps_to_carla(input_data["gps"][1])
         compass = utils.preprocess_compass(input_data["imu"][1][-1])
@@ -398,6 +408,8 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
 
         if SAVE_VIZ and self.step % 5 == 0:
             self._save_image(tick["target_points"], trajectory, path, answer)
+        if DUMP and self.step % 5 == 0:
+            self._dump_inputs(tick)
 
         if velocity < 0.1:
             self.stuck_detector += 1
@@ -434,6 +446,21 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
                 "trajectory": np.round(np.asarray(trajectory, dtype=np.float64)[:, :2], 2).tolist(),
             })
         return self.control
+
+    def _dump_inputs(self, tick) -> None:
+        instruction = getattr(self, "instruction", None)
+        if instruction is None or _DUMP_SPEED_RE.search(instruction):
+            return
+        wm = tick["wm_inputs"]
+        _, png = cv2.imencode(".png", cv2.cvtColor(self.vla_image, cv2.COLOR_RGB2BGR))  # lossless
+        np.savez_compressed(
+            self.save_dir / "dump" / f"{self.step:05d}.npz",
+            vla_png=np.frombuffer(png.tobytes(), dtype=np.uint8),
+            wm_tubelet=wm[0] if wm is not None else np.zeros(0), wm_state=wm[1] if wm is not None else np.zeros(0),
+            wm_actions=wm[2] if wm is not None else np.zeros(0),
+            wm_meta_command=np.array(getattr(self, "wm_meta_command", -1)),
+            target_points=tick["target_points"], speed=np.array(float(tick["speed"])),
+            prompt=np.array(self.prompt), instruction=np.array(instruction))
 
     def forced_mode_token(self):
         """Mode token to teacher-force this tick (None: let the model decode it)."""
