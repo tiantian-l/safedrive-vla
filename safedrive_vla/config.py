@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from hydra.core.config_store import ConfigStore
 
@@ -68,6 +68,9 @@ class ModelConfig:
     action_token: ActionTokenConfig = field(default_factory=ActionTokenConfig)
     # navigation-conditioned world-model dreaming; leave unset for a model without it
     world_model: Optional[WorldModelConfig] = None
+    # Fine-tuning (11/20): start from a released model.ckpt (its config.yaml supplies the world-model paths)
+    init_ckpt: Optional[str] = None
+    freeze_vision: bool = False
 
 
 @dataclass
@@ -79,6 +82,8 @@ class DataConfig:
     # Sampling weights of SimLingo's scenario buckets ("all" = every frame).
     train_partitions: Dict[str, float] = field(default_factory=lambda: {"all": 1.0})
     train_partitions_action_dreaming: Dict[str, float] = field(default_factory=lambda: {"all": 1.0})
+    dreaming_fraction: float = 0.5                 # share of action-dreaming samples (paper: 50/50)
+    relabel: Optional[Dict[str, Any]] = None       # junction relabelling, see safedrive_vla/data/relabel.py
 
 
 @dataclass
@@ -95,6 +100,9 @@ class TrainConfig:
     val_every_n_epochs: int = 1
     resume_path: Optional[str] = None   # DeepSpeed checkpoint directory to resume from
     wandb_project: Optional[str] = None  # log to Weights & Biases; CSV logs otherwise
+    max_steps: int = -1                  # optimizer steps; -1 = run max_epochs
+    save_every_n_steps: int = 0          # > 0: also keep a checkpoint every N optimizer steps
+    limit_val_batches: float = 1.0
 
 
 ConfigStore.instance().store(name="train_base", node=TrainConfig)

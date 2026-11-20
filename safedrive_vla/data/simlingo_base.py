@@ -193,7 +193,8 @@ class BaseDataset(Dataset):
         return os.path.join(self.data_root, "dreamer", os.path.relpath(rel, "data"))
 
     def _load_bucket(self, bucket_name: str) -> Dict[str, set]:
-        with open(f"{self.data_root}/buckets_paths.pkl", "rb") as f:
+        bucket_file = "buckets_relabel.pkl" if bucket_name.startswith("relabel_") else "buckets_paths.pkl"
+        with open(f"{self.data_root}/{bucket_file}", "rb") as f:
             bucket_dict = pkl.load(f)
         keys = _BUCKET_ALIASES.get(bucket_name, [bucket_name])
         if any(k not in bucket_dict for k in keys):

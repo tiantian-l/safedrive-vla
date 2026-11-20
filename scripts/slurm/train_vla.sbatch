@@ -8,13 +8,19 @@
 #
 #SBATCH --job-name=safedrive-vla
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:8
+#SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=64
 #SBATCH --time=3-00:00:00
 #SBATCH --output=logs/slurm/%x-%j.out
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
+# Same environment as eval.sbatch (11/20): compute nodes are offline.
+CONDA_ROOT="${CONDA_ROOT:-/projects/EEHPC-DEV-2026D07-102/dreamer/dependency/miniconda3}"
+export PATH="${CONDA_ROOT}/envs/${ENV_NAME:-safedrive}/bin:${PATH}"
+export PYTHONNOUSERSITE=1
+export HF_HOME="${HF_HOME:-/projects/EEHPC-DEV-2026D07-102/safedrive/hf_cache}"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 WANDB_MODE=offline
 # The launcher starts one process per GPU itself (Lightning / torchrun);
 # hide the Slurm task layout so it is not mistaken for an srun step.
 unset SLURM_NTASKS SLURM_NTASKS_PER_NODE SLURM_PROCID SLURM_LOCALID

@@ -271,10 +271,15 @@ class DrivingDataset(_SafeDriveSampleMixin, BaseDataset):
         codebook_path: str,
         use_mode_token: bool = True,
         world_model: Optional[Dict[str, Any]] = None,
+        relabel: Optional[Dict[str, Any]] = None,
         **base_kwargs,
     ):
         BaseDataset.__init__(self, action_dreaming=False, **base_kwargs)
         self._init_safedrive(codebook_path, use_mode_token, world_model)
+        self.relabeler = None
+        if relabel:
+            from safedrive_vla.data.relabel import Relabeler
+            self.relabeler = Relabeler.shared(data_root=self.data_root, **relabel)
 
     def __getitem__(self, index: int) -> DrivingSample:
         cv2.setNumThreads(0)
@@ -290,11 +295,16 @@ class DrivingDataset(_SafeDriveSampleMixin, BaseDataset):
         target_point = self.augment_target_point(np.array(current["target_point"]), y_aug, yaw_aug)
         next_target_point = self.augment_target_point(np.array(current["target_point_next"]), y_aug, yaw_aug)
         navigation = random.choice(self.navigation_prompts(current, target_point))
+        anchor_command = int(current.get("command", 0))
+        if self.relabeler is not None:
+            relabelled = self.relabeler.apply(measurement_path, int(self.sample_start[index]), anchor_command)
+            if relabelled is not None:
+                navigation, anchor_command = relabelled
         speed = current["speed"]
         prompt = f"Current speed: {round(speed, 1)} m/s. {navigation} {TASK_PROMPT}".replace("..", ".")
         image = self.load_image(index, shifted_camera=shifted)
 
-        meta_name = COMMAND_TO_META_COMMAND.get(int(current.get("command", 0)))
+        meta_name = COMMAND_TO_META_COMMAND.get(anchor_command)
         meta_command, mode = -1, None
         if meta_name is not None:
             meta_command = META_COMMAND_TO_INDEX[meta_name]

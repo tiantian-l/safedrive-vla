@@ -100,6 +100,8 @@ class SafeDriveVLA(pl.LightningModule):
         pct_start: float = 0.05,
         action_token: Optional[dict] = None,
         world_model: Optional[dict] = None,
+        init_ckpt: Optional[str] = None,
+        freeze_vision: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters(ignore=["processor"])
@@ -191,6 +193,21 @@ class SafeDriveVLA(pl.LightningModule):
         self.vlm.get_input_embeddings().register_forward_hook(self._override_embeddings)
 
         self.path_head = PathHead(hidden_size, int(path_head.get("num_points", 20)), int(path_head.get("hidden", 512)))
+
+        # ---- fine-tuning (11/20) -------------------------------------------
+        if freeze_vision:
+            for name, param in self.vlm.named_parameters():
+                if _is_vision_module(name) and "lora_" not in name:
+                    param.requires_grad = False
+        if init_ckpt:
+            state = torch.load(init_ckpt, map_location="cpu", weights_only=False)
+            state = state.get("state_dict", state)
+            missing, unexpected = self.load_state_dict(state, strict=False)
+            if unexpected:
+                raise RuntimeError(f"Unexpected keys in {init_ckpt}: {unexpected[:5]}")
+            n_train = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            print(f"[init] loaded {init_ckpt}: {len(state)} tensors, {len(missing)} missing "
+                  f"(first {missing[:3]}), freeze_vision={freeze_vision}, trainable params {n_train / 1e6:.1f} M")
 
     # ------------------------------------------------------------------
     # learned token embeddings

@@ -1,0 +1,56 @@
+# @package _global_
+#
+# E14 (11/20): short fine-tune of the released SafeDriveVLA with junction relabelling ([17]).
+# Frames approaching a junction (<= text_m before entry, and inside it) get the manoeuvre the expert
+# actually makes there as their navigation command; the world-model anchor follows within anchor_m
+# (B' = 15 m; A = -1, anchor never changed). Labels (trajectory, path) unchanged; dreaming samples unchanged.
+# Prerequisite: scripts/data/build_relabel_index.py -> database/simlingo/{relabel_index.json,buckets_relabel.pkl}
+#   4 GPUs x 12 x accumulate 2 = 96 / step; 1560 steps = ~150k samples; checkpoints at 780 and 1560.
+#   After training: scripts/tools/merge_ft_ckpt.py -> a model.ckpt the agent loads.
+
+defaults:
+  - safedrive_vla
+  - _self_
+
+name: ft_relabel_Bp
+gpus: 4
+max_steps: 1560
+save_every_n_steps: 780
+accumulate_grad_batches: 2
+limit_val_batches: 50
+
+model:
+  lr: 1e-5
+  init_ckpt: ckpts/safedrive-vla/safedrive_vla/model.ckpt
+  freeze_vision: true
+
+data:
+  dreaming_fraction: 0.35
+  relabel:
+    index: database/simlingo/relabel_index.json
+    sentences: safedrive_vla/assets/relabel_sentences.json
+    text_m: 30.0
+    anchor_m: 15.0
+    p_comp: 0.8
+    p_nonjunction: 0.2
+  # original driving buckets (sum 1.0) + relabel buckets: relabel = 0.857 / 1.857 = 46% of driving
+  # = 30% of all samples (straight 18%, turn 12%); original driving 35%, dreaming 35%.
+  train_partitions:
+    all: 0.082
+    acceleration_negative_5: 0.03
+    acceleration_negative_1: 0.03
+    acceleration_positive_1: 0.03
+    acceleration_positive_5: 0.03
+    lateral_control_1_2: 0.12
+    lateral_control_higher_5: 0.12
+    start_from_stop: 0.07
+    vehicle_front: 0.04
+    vehicle_side: 0.08
+    leading_object_vehicle: 0.09
+    leading_object_traffic.stop: 0.07
+    leading_object_traffic.traffic_light: 0.07
+    leading_object_walker: 0.05
+    changed_route: 0.08
+    parkinglane: 0.008
+    relabel_straight: 0.514
+    relabel_turn: 0.343

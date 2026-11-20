@@ -39,6 +39,18 @@ def main(cfg: TrainConfig) -> None:
     def abspath(path):
         return path if path is None or os.path.isabs(path) else os.path.join(root, path)
 
+    if cfg.model.get("init_ckpt"):
+        # Fine-tuning: take the world-model / anchor paths of the released model so the dreams match.
+        cfg.model.init_ckpt = abspath(cfg.model.init_ckpt)
+        released = os.path.join(os.path.dirname(cfg.model.init_ckpt), "config.yaml")
+        if cfg.model.world_model is not None and os.path.isfile(released):
+            base = OmegaConf.load(released)
+            for key in ("encoder_ckpt", "predictor_ckpt", "action_anchor_path"):
+                cfg.model.world_model[key] = base.model.world_model[key]
+            print(f"[init] world model paths from {released}: {OmegaConf.to_container(cfg.model.world_model)}")
+    if cfg.data.get("relabel"):
+        for key in ("index", "sentences"):
+            cfg.data.relabel[key] = abspath(cfg.data.relabel[key])
     cfg.model.action_token.codebook_path = abspath(cfg.model.action_token.codebook_path)
     if cfg.model.world_model is not None:
         for key in ("encoder_ckpt", "predictor_ckpt", "action_anchor_path"):
@@ -60,6 +72,8 @@ def main(cfg: TrainConfig) -> None:
         train_partitions_action_dreaming=OmegaConf.to_container(cfg.data.train_partitions_action_dreaming),
         use_mode_token=cfg.model.use_mode_token,
         world_model=OmegaConf.to_container(cfg.model.world_model, resolve=True) if cfg.model.world_model is not None else None,
+        dreaming_fraction=cfg.data.dreaming_fraction,
+        relabel=OmegaConf.to_container(cfg.data.relabel, resolve=True) if cfg.data.get("relabel") else None,
     )
     model = hydra.utils.instantiate(cfg.model, processor=processor, _recursive_=False)
     if cfg.resume_path:
@@ -84,6 +98,8 @@ def main(cfg: TrainConfig) -> None:
         ),
         precision=cfg.precision,
         max_epochs=cfg.max_epochs,
+        max_steps=cfg.max_steps,
+        limit_val_batches=int(cfg.limit_val_batches) if cfg.limit_val_batches > 1 else cfg.limit_val_batches,  # > 1 = batches
         gradient_clip_val=cfg.gradient_clip_val,
         accumulate_grad_batches=cfg.accumulate_grad_batches,
         check_val_every_n_epoch=cfg.val_every_n_epochs,
@@ -92,6 +108,8 @@ def main(cfg: TrainConfig) -> None:
         callbacks=[
             ModelCheckpoint(dirpath="./checkpoints", filename="{epoch:03d}", save_top_k=-1, save_last=True,
                             every_n_epochs=cfg.val_every_n_epochs),
+            *([ModelCheckpoint(dirpath="./checkpoints", filename="{step:06d}", save_top_k=-1,
+                               every_n_train_steps=cfg.save_every_n_steps)] if cfg.save_every_n_steps > 0 else []),
             ModelSummary(max_depth=3),
             LearningRateMonitor(logging_interval="step"),
         ],

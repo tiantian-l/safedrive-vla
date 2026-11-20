@@ -52,8 +52,12 @@ class SafeDriveDataModule(LightningDataModule):
         train_partitions_action_dreaming: Dict[str, float],
         use_mode_token: bool = True,
         world_model: Optional[Dict[str, Any]] = None,
+        dreaming_fraction: float = 0.5,
+        relabel: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
+        self.dreaming_fraction = float(dreaming_fraction)
+        self.driving_kwargs = dict(relabel=dict(relabel)) if relabel else {}
         self.processor = processor
         self.tokenizer = processor.tokenizer
         self.action_ids = (int(action_start_id), int(action_start_id) + int(num_action_tokens))
@@ -77,14 +81,17 @@ class SafeDriveDataModule(LightningDataModule):
         datasets = {}
         for dataset_cls, partitions in zip((DrivingDataset, ActionDreamingDataset), self.partitions):
             total = sum(partitions.values())
-            suffix = "_action_dreaming" if dataset_cls is ActionDreamingDataset else ""
+            dreaming = dataset_cls is ActionDreamingDataset
+            suffix = "_action_dreaming" if dreaming else ""
+            extra = {} if dreaming else self.driving_kwargs
+            share = self.dreaming_fraction if dreaming else 1.0 - self.dreaming_fraction
             for bucket, weight in partitions.items():
-                ds = dataset_cls(split="train", bucket_name=bucket, **self.dataset_kwargs)
+                ds = dataset_cls(split="train", bucket_name=bucket, **self.dataset_kwargs, **extra)
                 if len(ds) == 0:
                     continue
                 datasets[bucket + suffix] = ds
                 bucket_names.append(bucket + suffix)
-                bucket_weights.append(float(weight) / total * 0.5)
+                bucket_weights.append(float(weight) / total * share)
 
         self.train_dataset = ConcatDataset([datasets[b] for b in bucket_names])
         per_sample = itertools.chain.from_iterable([w] * len(datasets[b]) for b, w in zip(bucket_names, bucket_weights))
@@ -93,7 +100,7 @@ class SafeDriveDataModule(LightningDataModule):
         print(f"[data] train buckets {dict(zip(bucket_names, bucket_weights))}, {num_samples} samples per epoch")
 
         self.val_dataset = ConcatDataset([
-            DrivingDataset(split="val", bucket_name="all", **self.dataset_kwargs),
+            DrivingDataset(split="val", bucket_name="all", **self.dataset_kwargs, **self.driving_kwargs),
             ActionDreamingDataset(split="val", bucket_name="all", **self.dataset_kwargs),
         ])
 
