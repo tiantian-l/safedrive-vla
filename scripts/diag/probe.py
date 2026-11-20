@@ -95,6 +95,7 @@ def variants(prompt, img, actions, anchors, meta_names):
 # ---------------------------------------------------------------- model
 def load(ckpt, device):
     import hydra, torch
+    torch.set_grad_enabled(False)  # probe is inference only (agent runs under no_grad too)
     from omegaconf import OmegaConf
     from safedrive_vla.models.backbone import load_processor
     ckpt = Path(ckpt); cfg_path = ckpt.parent / "config.yaml"
@@ -136,7 +137,7 @@ def infer(model, processor, device, prompt, img, tubelet, state, actions, target
         if bool((gen == model.actions_token_id).any()):
             _, hidden = model.forward_vlm(gen, torch.ones_like(gen), inputs["pixel_values"])
             p, _ = model.predict_path(gen, hidden.to(model.path_head.mlp[0].weight.dtype))
-            path = p[0].float().cpu().numpy()
+            path = p[0].detach().float().cpu().numpy()
     finally:
         model.clear_conditioning()
     answer = tokenizer.decode(gen[0, plen:], skip_special_tokens=False)
