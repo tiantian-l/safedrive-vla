@@ -46,7 +46,8 @@ _SPEED_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*m\s*/\s*s", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
 # Rewrite the active instruction into a phrasing seen in training (see
 # SafeDriveLanguageAgent.normalized_navigation). Off by default.
-INSTR_NORM = os.environ.get("SAFEDRIVE_INSTR_NORM", "0") == "1"
+INSTR_NORM_MODE = os.environ.get("SAFEDRIVE_INSTR_NORM", "0")   # "1" = every instruction, "speed" = target-speed only (E6)
+INSTR_NORM = INSTR_NORM_MODE in ("1", "speed")
 # Meta-command -> route-planner command text of the training prompts
 # (``Command: <text>.``, SimLingo's COMMAND_TEXT without the distance).
 META_COMMAND_TEXT = {
@@ -241,7 +242,10 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
         if meta is None:
             return None
         command = f"Command: {META_COMMAND_TEXT[meta]}."
-        if self.instruction_named_speed() is not None and meta == "follow_road":
+        is_speed = self.instruction_named_speed() is not None and meta == "follow_road"
+        if INSTR_NORM_MODE == "speed" and not is_speed:
+            return None   # E6: action / lane-follow instructions keep their raw text
+        if is_speed:
             text = self.instruction[:1].upper() + self.instruction[1:]
             return f"{command} {text}."
         return f"{command} {TASK_PROMPT}"

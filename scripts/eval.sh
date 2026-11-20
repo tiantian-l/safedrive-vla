@@ -14,6 +14,7 @@
 #   --debug-log                 write agent_debug.json (timings, mode, speeds, prompt, path, trajectory) per route
 #   --instr-norm                CARLA-F: rewrite the instruction into a training-time prompt
 #                               phrasing built from its parsed meta-command (SAFEDRIVE_INSTR_NORM)
+#   --instr-norm-speed          CARLA-F: the same rewrite for target-speed instructions only (E6)
 #   --no-creep                  never force the ego to creep after standing still for
 #                               stuck_threshold ticks (SAFEDRIVE_NO_CREEP)
 #   --force-mode NAME           DIAGNOSTIC: teacher-force the driving-mode token (SAFEDRIVE_FORCE_MODE):
@@ -52,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     --save-viz)   SAFEDRIVE_SAVE_VIZ="1"; shift ;;
     --debug-log)  SAFEDRIVE_DEBUG_LOG="1"; shift ;;
     --instr-norm) SAFEDRIVE_INSTR_NORM="1"; shift ;;
+    --instr-norm-speed) SAFEDRIVE_INSTR_NORM="speed"; shift ;;
     --no-creep)   SAFEDRIVE_NO_CREEP="1"; shift ;;
     --force-mode) SAFEDRIVE_FORCE_MODE="$2"; shift 2 ;;
     --dump)       SAFEDRIVE_DUMP="1"; shift ;;
