@@ -86,16 +86,24 @@ def main(cfg: TrainConfig) -> None:
     else:
         logger = CSVLogger(save_dir=".", name="logs")
 
-    trainer = pl.Trainer(
-        accelerator="gpu",
-        devices=cfg.gpus,
-        strategy=pl.strategies.DeepSpeedStrategy(
+    timeout = timedelta(seconds=int(os.environ.get("NCCL_TIMEOUT_SEC", "1800")))
+    weights_only = cfg.strategy == "ddp"
+    if cfg.strategy == "ddp":
+        # Fine-tuning (11/21): plain DDP, no DeepSpeed ops to compile (the cluster has no CUDA_HOME).
+        # Some heads (e.g. the target-point encoder) are unused in batches without their token.
+        strategy = pl.strategies.DDPStrategy(find_unused_parameters=True, timeout=timeout)
+    else:
+        strategy = pl.strategies.DeepSpeedStrategy(
             stage=2,
             loss_scale=32.0,
             logging_batch_size_per_gpu=cfg.data.batch_size,
-            timeout=timedelta(seconds=int(os.environ.get("NCCL_TIMEOUT_SEC", "1800"))),
+            timeout=timeout,
             exclude_frozen_parameters=True,
-        ),
+        )
+    trainer = pl.Trainer(
+        accelerator="gpu",
+        devices=cfg.gpus,
+        strategy=strategy,
         precision=cfg.precision,
         max_epochs=cfg.max_epochs,
         max_steps=cfg.max_steps,
@@ -107,9 +115,10 @@ def main(cfg: TrainConfig) -> None:
         logger=logger,
         callbacks=[
             ModelCheckpoint(dirpath="./checkpoints", filename="{epoch:03d}", save_top_k=-1, save_last=True,
+                            save_weights_only=weights_only,
                             every_n_epochs=cfg.val_every_n_epochs),
             *([ModelCheckpoint(dirpath="./checkpoints", filename="{step:06d}", save_top_k=-1,
-                               every_n_train_steps=cfg.save_every_n_steps)] if cfg.save_every_n_steps > 0 else []),
+                               every_n_train_steps=cfg.save_every_n_steps, save_weights_only=weights_only)] if cfg.save_every_n_steps > 0 else []),
             ModelSummary(max_depth=3),
             LearningRateMonitor(logging_interval="step"),
         ],

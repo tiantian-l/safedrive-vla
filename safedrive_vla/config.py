@@ -100,6 +100,7 @@ class TrainConfig:
     val_every_n_epochs: int = 1
     resume_path: Optional[str] = None   # DeepSpeed checkpoint directory to resume from
     wandb_project: Optional[str] = None  # log to Weights & Biases; CSV logs otherwise
+    strategy: str = "deepspeed"          # "deepspeed" (paper recipe) or "ddp" (fine-tuning, 11/21)
     max_steps: int = -1                  # optimizer steps; -1 = run max_epochs
     save_every_n_steps: int = 0          # > 0: also keep a checkpoint every N optimizer steps
     limit_val_batches: float = 1.0
