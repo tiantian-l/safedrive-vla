@@ -440,6 +440,8 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
                 # --force-mode diagnostics: the forced mode token (None = model's own) and
                 # the oracle hazard that chose it
                 "forced_mode": forced, "hazard": getattr(self, "oracle_hazard", None),
+                # --curve-speed (E7): the curvature speed cap applied this tick (None = no cap)
+                "speed_cap": getattr(self, "speed_cap", None),
                 # ego frame, x forward, y right (m): path head (None without <ACTIONS>)
                 # and the action-token trajectory, for the junction diagnosis
                 "path": None if path is None else np.round(np.asarray(path, dtype=np.float64)[:, :2], 2).tolist(),
@@ -480,10 +482,15 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         path, _ = self.model.predict_path(generated, hidden.to(self.model.path_head.mlp[0].weight.dtype))
         return path[0].float().cpu().numpy()
 
+    def limit_desired_speed(self, desired_speed: float, path: np.ndarray) -> float:
+        """Hook for a cap on the model's desired speed (CARLA-F: --curve-speed, E7). No cap here."""
+        self.speed_cap = None
+        return desired_speed
+
     def control_pid(self, path: np.ndarray, speed: np.ndarray, trajectory: np.ndarray):
         """Lateral PID along ``path``; longitudinal PID towards the speed of the
         action-token ``trajectory`` between 0.5 s and 1.0 s."""
-        desired_speed = self._model_desired_speed(trajectory)
+        desired_speed = self.limit_desired_speed(self._model_desired_speed(trajectory), path)
         brake = desired_speed < self.config.brake_speed or (speed / max(float(desired_speed), 1e-4)) > self.config.brake_ratio
         delta = np.clip(desired_speed - speed, 0.0, self.config.clip_delta)
         throttle = np.clip(self.speed_controller.step(delta), 0.0, self.config.clip_throttle)

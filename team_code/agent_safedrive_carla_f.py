@@ -48,6 +48,33 @@ _WS_RE = re.compile(r"\s+")
 # SafeDriveLanguageAgent.normalized_navigation). Off by default.
 INSTR_NORM_MODE = os.environ.get("SAFEDRIVE_INSTR_NORM", "0")   # "1" = every instruction, "speed" = target-speed only (E6)
 INSTR_NORM = INSTR_NORM_MODE in ("1", "speed")
+# E7 / idea [15] (11/21): cap the desired speed at sqrt(a_lat * R), R = the tightest radius of the
+# model's own path-head path within ~20 m. Upper bound only, steering unchanged; never during a
+# target-speed instruction (SE is measured at its end). SAFEDRIVE_CURVE_ALAT = a_lat in m/s^2; 0 = off.
+CURVE_ALAT = float(os.environ.get("SAFEDRIVE_CURVE_ALAT", "0") or 0)
+CURVE_VMIN = float(os.environ.get("SAFEDRIVE_CURVE_VMIN", "4.0"))   # never cap below this (m/s)
+CURVE_R_APPLY = 50.0   # bends with R >= 50 m are not capped
+CURVE_SPAN = 4         # circumradius of path points (i, i+4, i+8), 1 m spacing ...
+CURVE_I_MAX = 10       # ... for i = 0..10 (first ~18 m of the path)
+
+
+def path_curve_speed_cap(path, a_lat: float, v_min: float = CURVE_VMIN) -> Optional[float]:
+    """sqrt(a_lat * R_min) over the path's three-point circumradii; None if every bend has R >= CURVE_R_APPLY."""
+    if path is None or a_lat <= 0:
+        return None
+    pts = [(float(p[0]), float(p[1])) for p in path]
+    r_min = math.inf
+    for i in range(0, min(CURVE_I_MAX, len(pts) - 2 * CURVE_SPAN - 1) + 1):
+        (ax, ay), (bx, by), (cx, cy) = pts[i], pts[i + CURVE_SPAN], pts[i + 2 * CURVE_SPAN]
+        ab, bc, ca = math.hypot(bx - ax, by - ay), math.hypot(cx - bx, cy - by), math.hypot(ax - cx, ay - cy)
+        if ab < 1.0 or bc < 1.0:
+            continue
+        cross = abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax))
+        if cross > 1e-6:
+            r_min = min(r_min, ab * bc * ca / (2.0 * cross))
+    if r_min >= CURVE_R_APPLY:
+        return None
+    return max(v_min, math.sqrt(a_lat * r_min))
 # Meta-command -> route-planner command text of the training prompts
 # (``Command: <text>.``, SimLingo's COMMAND_TEXT without the distance).
 META_COMMAND_TEXT = {
@@ -249,6 +276,18 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
             text = self.instruction[:1].upper() + self.instruction[1:]
             return f"{command} {text}."
         return f"{command} {TASK_PROMPT}"
+
+    def limit_desired_speed(self, desired_speed: float, path) -> float:
+        """--curve-speed (E7): cap the desired speed on tight bends of the model's own path;
+        off during target-speed instructions."""
+        self.speed_cap = None
+        if CURVE_ALAT <= 0 or self.instruction_named_speed() is not None:
+            return desired_speed
+        cap = path_curve_speed_cap(path, CURVE_ALAT)
+        if cap is None or cap >= desired_speed:
+            return desired_speed
+        self.speed_cap = round(cap, 2)
+        return cap
 
     def instruction_named_speed(self) -> Optional[float]:
         """Speed named by the active instruction, if it is a target-speed

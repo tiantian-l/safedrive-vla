@@ -15,6 +15,9 @@
 #   --instr-norm                CARLA-F: rewrite the instruction into a training-time prompt
 #                               phrasing built from its parsed meta-command (SAFEDRIVE_INSTR_NORM)
 #   --instr-norm-speed          CARLA-F: the same rewrite for target-speed instructions only (E6)
+#   --curve-speed A_LAT         CARLA-F (E7): cap the desired speed at sqrt(A_LAT * R) on bends of the
+#                               path head's path (R < 50 m, floor 4 m/s), not during target-speed
+#                               instructions (SAFEDRIVE_CURVE_ALAT; 0 = off)
 #   --no-creep                  never force the ego to creep after standing still for
 #                               stuck_threshold ticks (SAFEDRIVE_NO_CREEP)
 #   --force-mode NAME           DIAGNOSTIC: teacher-force the driving-mode token (SAFEDRIVE_FORCE_MODE):
@@ -43,6 +46,7 @@ export SAFEDRIVE_INSTR_NORM="${SAFEDRIVE_INSTR_NORM:-0}"
 export SAFEDRIVE_NO_CREEP="${SAFEDRIVE_NO_CREEP:-0}"
 export SAFEDRIVE_FORCE_MODE="${SAFEDRIVE_FORCE_MODE:-}"
 export SAFEDRIVE_DUMP="${SAFEDRIVE_DUMP:-0}"
+export SAFEDRIVE_CURVE_ALAT="${SAFEDRIVE_CURVE_ALAT:-0}"
 ROUTE_WALLTIME=14400
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -57,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --no-creep)   SAFEDRIVE_NO_CREEP="1"; shift ;;
     --force-mode) SAFEDRIVE_FORCE_MODE="$2"; shift 2 ;;
     --dump)       SAFEDRIVE_DUMP="1"; shift ;;
+    --curve-speed) SAFEDRIVE_CURVE_ALAT="$2"; shift 2 ;;
     --route-walltime) ROUTE_WALLTIME="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
@@ -86,7 +91,7 @@ if [[ -z "${OUTPUT_DIR}" ]]; then
 fi
 export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"
 export TOKENIZERS_PARALLELISM=false
-echo "debug_log=${SAFEDRIVE_DEBUG_LOG} instr_norm=${SAFEDRIVE_INSTR_NORM} no_creep=${SAFEDRIVE_NO_CREEP} force_mode=${SAFEDRIVE_FORCE_MODE:-off} save_viz=${SAFEDRIVE_SAVE_VIZ} dump=${SAFEDRIVE_DUMP}"
+echo "debug_log=${SAFEDRIVE_DEBUG_LOG} instr_norm=${SAFEDRIVE_INSTR_NORM} no_creep=${SAFEDRIVE_NO_CREEP} force_mode=${SAFEDRIVE_FORCE_MODE:-off} save_viz=${SAFEDRIVE_SAVE_VIZ} dump=${SAFEDRIVE_DUMP} curve_alat=${SAFEDRIVE_CURVE_ALAT}"
 
 python tools/run_distributed_eval.py \
   --routes-dir "${ROUTES_DIR}" \
