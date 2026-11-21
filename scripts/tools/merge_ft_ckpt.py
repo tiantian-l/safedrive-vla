@@ -5,10 +5,13 @@ model.ckpt (the fine-tune's init_ckpt): frozen parts (e.g. the vision encoder wi
 come from it unchanged. The released config.yaml is copied next to the output (same architecture; the agent reads it).
 
     $PY scripts/tools/merge_ft_ckpt.py --base ckpts/safedrive-vla/safedrive_vla/model.ckpt \
-        --ds work_dirs/safedrive_vla/ft_relabel_Bp/<run>/checkpoints/step=001560.ckpt --out ckpts/ft/E14_Bp_s1560/model.ckpt
+        --ds work_dirs/safedrive_vla/E14_ft_Bp/<run>/checkpoints/step=001560.ckpt --out ckpts/ft/E14_Bp_s1560/model.ckpt
 """
-import argparse, shutil
+import argparse, shutil, sys
 from pathlib import Path
+
+# Lightning .ckpt files pickle objects from safedrive_vla (hyper-parameters): make the repo importable.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch
 
