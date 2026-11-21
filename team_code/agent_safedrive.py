@@ -402,6 +402,7 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
                    if self.model.action_start_id <= t < self.model.action_end_id][: self.horizon]
         indices += [0] * (self.horizon - len(indices))
         trajectory = self.action_tokenizer.rollout_xy(indices)
+        path = self.filter_path(path)
         steer_points = path if path is not None else trajectory
         velocity = torch.tensor([tick["speed"]], dtype=torch.float32)
         steer, throttle, brake = self.control_pid(steer_points, velocity[0].numpy(), trajectory)
@@ -442,6 +443,8 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
                 "forced_mode": forced, "hazard": getattr(self, "oracle_hazard", None),
                 # --curve-speed (E7): the curvature speed cap applied this tick (None = no cap)
                 "speed_cap": getattr(self, "speed_cap", None),
+                # --instr-filter (scheme B): {"dir", "heading", "reject", "held"} of this tick (None = off)
+                "filter": getattr(self, "filter_state", None),
                 # ego frame, x forward, y right (m): path head (None without <ACTIONS>)
                 # and the action-token trajectory, for the junction diagnosis
                 "path": None if path is None else np.round(np.asarray(path, dtype=np.float64)[:, :2], 2).tolist(),
@@ -481,6 +484,12 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
         _, hidden = self.model.forward_vlm(generated, torch.ones_like(generated), inputs["pixel_values"])
         path, _ = self.model.predict_path(generated, hidden.to(self.model.path_head.mlp[0].weight.dtype))
         return path[0].float().cpu().numpy()
+
+    def filter_path(self, path):
+        """Hook for an instruction-consistency check of the path head's path (CARLA-F: --instr-filter,
+        scheme B). Here: the model's path unchanged."""
+        self.filter_state = None
+        return path
 
     def limit_desired_speed(self, desired_speed: float, path: np.ndarray) -> float:
         """Hook for a cap on the model's desired speed (CARLA-F: --curve-speed, E7). No cap here."""

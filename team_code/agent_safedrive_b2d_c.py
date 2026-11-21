@@ -29,3 +29,4 @@ class SafeDriveConflictAgent(SafeDriveLanguageAgent):
     META_COMMAND_TABLE = Path(__file__).resolve().parent / "conflict_instruction_meta_commands.json"
     UNKNOWN_META_COMMAND = "follow_road"
     NORMALIZE_INSTRUCTION = False
+    INSTR_FILTER = False   # scheme B (--instr-filter) off: B2D-C instructions may ask for something unsafe

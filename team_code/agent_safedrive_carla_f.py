@@ -58,6 +58,52 @@ CURVE_SPAN = 4         # circumradius of path points (i, i+4, i+8), 1 m spacing 
 CURVE_I_MAX = 10       # ... for i = 0..10 (first ~18 m of the path)
 
 
+# Scheme B / idea [13] (11/21): instruction-consistency filter on the path head's path. The direction
+# the active instruction asks for is parsed from its text by keywords (never from the route); a path
+# whose heading at 15 m contradicts it by more than FILTER_TH_DEG is rejected and the last accepted
+# path is kept for at most FILTER_TMAX_S, then the model's path is used again. Not during
+# target-speed instructions; CARLA-F only (the B2D-C agent switches it off: its instructions may be unsafe).
+# SAFEDRIVE_INSTR_FILTER = "TH_DEG,TMAX_S" (e.g. "30,1.0"); empty = off.
+_FILTER_ARGS = [x for x in os.environ.get("SAFEDRIVE_INSTR_FILTER", "").split(",") if x.strip()]
+FILTER_ON = len(_FILTER_ARGS) == 2
+FILTER_TH_DEG = float(_FILTER_ARGS[0]) if FILTER_ON else 30.0
+FILTER_TMAX_TICKS = int(round(float(_FILTER_ARGS[1]) * 20)) if FILTER_ON else 20   # 20 Hz
+FILTER_AT_M = 15   # heading of the path point ~15 m ahead (index 14, 1 m spacing)
+
+
+def instruction_direction(text: str) -> Optional[str]:
+    """Direction asked for by an instruction, from keywords of its text: "left" / "right" (turn or lane
+    change toward that side), "straight" (straight through a junction, follow the road / lane);
+    None for target-speed instructions."""
+    t = _normalize(text)
+    if _SPEED_RE.search(t):
+        return None
+    words = set(re.findall(r"[a-z]+", t))
+    if "left" in words and "right" not in words:
+        return "left"
+    if "right" in words and "left" not in words:
+        return "right"
+    return "straight"
+
+
+def path_heading_deg(path, at_m: int = FILTER_AT_M) -> Optional[float]:
+    """Heading (deg, + = right) of the path point ~at_m metres ahead (ego frame, x forward, y right)."""
+    if path is None or len(path) == 0:
+        return None
+    x, y = float(path[min(at_m, len(path)) - 1][0]), float(path[min(at_m, len(path)) - 1][1])
+    return math.degrees(math.atan2(y, x))
+
+
+def path_consistent(direction: Optional[str], heading: Optional[float], th: float = FILTER_TH_DEG) -> bool:
+    if direction is None or heading is None:
+        return True
+    if direction == "straight":
+        return abs(heading) <= th
+    if direction == "left":
+        return heading <= th      # reject a clear right
+    return heading >= -th         # "right": reject a clear left
+
+
 def path_curve_speed_cap(path, a_lat: float, v_min: float = CURVE_VMIN) -> Optional[float]:
     """sqrt(a_lat * R_min) over the path's three-point circumradii; None if every bend has R >= CURVE_R_APPLY."""
     if path is None or a_lat <= 0:
@@ -118,6 +164,8 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
     # Instruction normalization (SAFEDRIVE_INSTR_NORM=1) only for CARLA-F; the
     # conflict agent keeps the raw text, whose unsafe requests the model must refuse.
     NORMALIZE_INSTRUCTION = True
+    # --instr-filter (scheme B) only for CARLA-F; the conflict agent keeps the model's path.
+    INSTR_FILTER = True
 
     def setup(self, path_to_conf_file):
         super().setup(path_to_conf_file)
@@ -276,6 +324,38 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
             text = self.instruction[:1].upper() + self.instruction[1:]
             return f"{command} {text}."
         return f"{command} {TASK_PROMPT}"
+
+    def filter_path(self, path):
+        """--instr-filter (scheme B): reject a path that contradicts the instruction's direction and keep the
+        last accepted one for at most FILTER_TMAX_TICKS ticks (never across instructions)."""
+        self.filter_state = None
+        if not (FILTER_ON and self.INSTR_FILTER) or path is None:
+            return path
+        if self.current_instruction is None:
+            # Between instructions (a turn judged complete while the ego is still in the junction, before
+            # the next instruction triggers) the prompt says "follow the road" but the ego may still be
+            # turning (103 / 111 / 10, 11/21): no check, and no held path carried over.
+            self._filter_text = None
+            return path
+        text = self.current_instruction.text
+        direction = instruction_direction(text)
+        if getattr(self, "_filter_text", None) != text:        # new instruction: forget the held path
+            self._filter_text, self._filter_last, self._filter_held, self._filter_spent = text, None, 0, False
+        heading = path_heading_deg(path)
+        state = {"dir": direction, "heading": None if heading is None else round(heading, 1), "reject": False, "held": 0}
+        if path_consistent(direction, heading):
+            self._filter_last, self._filter_held, self._filter_spent = path, 0, False
+            self.filter_state = state
+            return path
+        state["reject"] = True
+        if self._filter_last is not None and not self._filter_spent and self._filter_held < FILTER_TMAX_TICKS:
+            self._filter_held += 1
+            state["held"] = self._filter_held
+            self.filter_state = state
+            return self._filter_last
+        self._filter_spent = True   # time-out (or nothing to hold): use the model's path until one passes
+        self.filter_state = state
+        return path
 
     def limit_desired_speed(self, desired_speed: float, path) -> float:
         """--curve-speed (E7): cap the desired speed on tight bends of the model's own path;
