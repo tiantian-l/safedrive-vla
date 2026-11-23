@@ -40,7 +40,7 @@ index c5e7517..479dcb2 100644
          behavior.add_children(scenario_behaviors)
          return behavior
 diff --git a/team_code/data_agent.py b/team_code/data_agent.py
-index 2d14553..7942ff2 100644
+index 2d14553..1c6fb09 100644
 --- a/team_code/data_agent.py
 +++ b/team_code/data_agent.py
 @@ -10,17 +10,26 @@ import numpy as np
@@ -156,6 +156,17 @@ index 2d14553..7942ff2 100644
      self.last_ego_transform = self._vehicle.get_transform()
  
      if plant:
+@@ -300,8 +327,8 @@ class DataAgent(AutoPilot):
+       return control
+ 
+   def augment_camera(self, sensors):
+-    # Update dummy vehicle
+-    if self.initialized:
++    # Update dummy vehicle (only used by the augmented BEV, which RGB_ONLY does not build)
++    if self.initialized and not RGB_ONLY:
+       # We are still rendering the map for the current frame, so we need to use the translation from the last frame.
+       last_translation = self.augmentation_translation
+       last_rotation = self.augmentation_rotation
 @@ -371,6 +398,8 @@ class DataAgent(AutoPilot):
      # CARLA images are already in opencv's BGR format.
      cv2.imwrite(str(self.save_path / 'rgb' / (f'{frame:04}.jpg')), tick_data['rgb'])
