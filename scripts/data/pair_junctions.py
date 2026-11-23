@@ -178,11 +178,13 @@ def main():
             for m, s, e, _ in lst:
                 if m in done: continue          # one connection per manoeuvre
                 done.add(m)
-                mid = s.next(max(1.0, s.transform.location.distance(e.transform.location) / 2))
                 exit_pts = walk_fwd(e, a.exit_m)
-                if not exit_pts:
+                if len(exit_pts) < 3:
                     skip["no exit road"] += 1; continue
-                wps = [approach[0]] + approach[10::10] + [inc] + ([mid[0]] if mid else []) + [e, exit_pts[-1]]
+                # No waypoint inside the junction: connection lanes overlap there and the planner may snap a point
+                # to another connection and loop around the block (11/23 check: 531 detours). From the lane end
+                # before the junction to a point a few metres down the exit road the shortest path is this connection.
+                wps = [approach[0]] + approach[10::10] + [inc, exit_pts[2], exit_pts[-1]]
                 rid = n_route; n_route += 1
                 root = ET.Element("routes"); r = ET.SubElement(root, "route", id=str(rid), town=town)
                 ws = ET.SubElement(r, "weathers")

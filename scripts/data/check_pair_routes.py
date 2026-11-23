@@ -7,7 +7,7 @@ start lane to the end, |d| <= 30 deg S, < -30 L, > 30 R), whether it matches the
 the straight-line sum (a detour means the planner took another way), the lane (road, lane) of the first trace point,
 and the junction ids the trace passes. Per group (same start lane): do all routes start on the same lane and pass
 the same first junction?
-Also draws --n-plots groups (stratified by lane position / reach) on top of the lane centre lines around the
+Writes check/clean_groups.json (groups to collect). Also draws --n-plots groups (stratified by lane position / reach) on top of the lane centre lines around the
 junction: work_dirs/pair_junctions/check/<group>.png (grey = driving lanes, colours = traced routes, dot = start).
 
     CARLA_ROOT=$P/carla0915 $PY scripts/data/check_pair_routes.py --pairs work_dirs/pair_junctions
@@ -78,7 +78,9 @@ def main():
     for x in [x for x in res if not x["ok"] or x["detour"]][:30]:
         lines.append(f"  {x['route']:40s} intended {x['man']} traced {x['traced']} dyaw {x['dyaw']:+.0f} len {x['length']} / {x['straight']}")
     text = "\n".join(lines); print(text)
+    clean = sorted(g for g, xs in groups.items() if g not in bad_group and all(x["ok"] and not x["detour"] for x in xs))
     (root / "check").mkdir(exist_ok=True)
+    json.dump(clean, open(root / "check" / "clean_groups.json", "w"))
     (root / "check" / "summary.txt").write_text(text + "\n")
     json.dump(res, open(root / "check" / "check.json", "w"))
 
