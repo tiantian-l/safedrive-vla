@@ -17,7 +17,9 @@ For each kept incoming lane: one route per manoeuvre (S and each available turn)
 before the junction on the same lane (shorter if the previous junction is closer; >= --min-approach-m), through
 the middle of that connection, --exit-m after the junction. Waypoints: start, every 20 m of the approach, the
 lane end before the junction, the connection middle, its end, the exit end (the leaderboard densifies them with
-the global route planner). One weather per incoming lane (same for its routes), drawn from a fixed list.
+the global route planner). One weather per incoming lane (same for its routes), drawn from a fixed list;
+(11/23) afterwards rewritten with SimLingo's random weather lists by scripts/data/pair_weather.py (keep this
+rng.choice: removing it would change the junction / lane selection).
 
 Outputs (--out): routes/<Town>/<town>_j<junction>_r<road>_l<lane>_<M>.xml (leaderboard route XML, no scenarios),
 manifest.json (one record per route), summary.txt.
