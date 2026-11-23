@@ -299,7 +299,8 @@ def main():
     r = sub.choices["run"]
     r.add_argument("--garage", default="../carla_garage")
     r.add_argument("--gpu-ids", default="0,0")
-    r.add_argument("--base-port", type=int, default=2000)
+    # eval (tools/run_distributed_eval.py) uses 2000 + 100 i; stop_carla() pkills by port -> stay clear of it
+    r.add_argument("--base-port", type=int, default=21000)
     r.add_argument("--carla-wait", type=int, default=180, help="seconds to wait for a server")
     r.add_argument("--stagger", type=int, default=20, help="seconds between server starts")
     r.add_argument("--route-timeout", type=int, default=1200, help="seconds per route attempt")

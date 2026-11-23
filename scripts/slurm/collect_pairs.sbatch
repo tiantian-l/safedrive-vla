@@ -4,8 +4,8 @@
 # like the Bench2Drive evaluator in scripts/eval.sh does (CarlaUE4.sh -RenderOffScreen -graphicsadapter).
 # Arguments go to `collect_pairs.py run`. Submit from the repository root; resubmitting resumes.
 #
-#   sbatch -p dev-a100-40 --gpus=1 --time=01:00:00 -J E17-collect-try -D $PWD scripts/slurm/collect_pairs.sbatch \
-#       --groups <group> --gpu-ids 0,0,0
+#   sbatch -p dev-a100-40 --gpus=1 --cpus-per-task=16 --time=01:00:00 -J E17-collect-try -D $PWD \
+#       scripts/slurm/collect_pairs.sbatch --groups Town12_j19970_r1007_l-1 --gpu-ids 0,0,0 --out database/e17_try
 #
 #SBATCH --job-name=E17-collect
 #SBATCH --nodes=1
@@ -23,6 +23,7 @@ export CARLA_ROOT="${CARLA_ROOT:-/projects/EEHPC-DEV-2026D07-102/safedrive/carla
 CONDA_ROOT="${CONDA_ROOT:-/projects/EEHPC-DEV-2026D07-102/dreamer/dependency/miniconda3}"
 export PATH="${CONDA_ROOT}/envs/${ENV_NAME:-safedrive}/bin:${PATH}"
 export PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1 OMP_NUM_THREADS=2
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 # Only the NVIDIA Vulkan driver, so that CARLA never renders on lavapipe (CPU).
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
 export VK_DRIVER_FILES="$VK_ICD_FILENAMES"
