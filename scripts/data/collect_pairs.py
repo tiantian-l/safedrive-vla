@@ -75,6 +75,25 @@ def finished(out, kind, name):
     return len(prog) == 2 and prog[0] >= prog[1] and len(dirs) == 1
 
 
+def port_free(port):
+    """True if nothing on this node holds the port (the traffic manager's rpc server binds 0.0.0.0:port; the nodes
+    are shared, e.g. 6000 / 6001 / 6100 were taken in trial 2264767: X11 display ports)."""
+    with socket.socket() as s:
+        try:
+            s.bind(("0.0.0.0", port))
+            return True
+        except OSError:
+            return False
+
+
+def first_free(start, n=1, span=90):
+    """First p in [start, start + span) with p .. p + n - 1 all free."""
+    for p in range(start, start + span):
+        if all(port_free(p + k) for k in range(n)):
+            return p
+    raise RuntimeError(f"no free port in {start}..{start + span}")
+
+
 def port_open(port, host="127.0.0.1"):
     with socket.socket() as s:
         s.settimeout(1.0)
@@ -84,12 +103,14 @@ def port_open(port, host="127.0.0.1"):
 class Slot:
     def __init__(self, idx, gpu, port, tm_port, args):
         self.idx, self.gpu, self.port, self.args = idx, gpu, port, args
+        self.base_port = port
         self.tm_port = tm_port  # CARLA itself uses port, port+1, port+2
         self.server = None
         self.attempts = 0  # every attempt gets its own traffic-manager port (a just-closed one may not rebind)
 
     def start_carla(self):
         self.stop_carla()
+        self.port = first_free(self.base_port, n=3, span=80)  # CARLA uses port, port+1, port+2
         carla = Path(os.environ["CARLA_ROOT"]) / "CarlaUE4.sh"
         cmd = [str(carla), "-RenderOffScreen", "-nosound", f"-carla-rpc-port={self.port}",
                f"-graphicsadapter={self.gpu}"]
@@ -145,7 +166,7 @@ class Slot:
             "RGB_ONLY": "1", "KEEP_ROUTE_WEATHER": "1", "NO_BACKGROUND": "1", "ALL_GREEN": str(int(a.all_green)),
             "CUDA_VISIBLE_DEVICES": env.get("CUDA_VISIBLE_DEVICES", ""),
         })
-        tm_port = self.tm_port + self.attempts % 50
+        tm_port = first_free(self.tm_port + self.attempts % 50, span=50)
         self.attempts += 1
         cmd = [sys.executable, "-u", str(garage / "leaderboard_autopilot/leaderboard/leaderboard_evaluator_local.py"),
                f"--port={self.port}", f"--traffic-manager-port={tm_port}", f"--traffic-manager-seed={seed}",
