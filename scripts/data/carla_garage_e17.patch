@@ -39,6 +39,76 @@ index c5e7517..479dcb2 100644
  
          behavior.add_children(scenario_behaviors)
          return behavior
+diff --git a/team_code/config.py b/team_code/config.py
+index 339b136..c172dcc 100644
+--- a/team_code/config.py
++++ b/team_code/config.py
+@@ -35,7 +35,7 @@ class GlobalConfig:
+     self.steer_noise = 1e-3  # Noise added to expert steering angle
+     # Distance of obstacles (in meters) in which we will check for collisions
+     self.detection_radius = 50.0
+-    self.num_route_points_saved = 20  # Number of future route points we save per step.
++    self.num_route_points_saved = 40  # Number of future route points we save per step. # original 20
+     # Distance of traffic lights considered relevant (in meters)
+     self.light_radius = 64.0
+     # Bounding boxes in this radius around the car will be saved in the dataset.
+@@ -169,31 +169,31 @@ class GlobalConfig:
+     # Transition length for sceneario VehicleOpensDoorTwoWays to change lanes
+     self.transition_length_vehicle_opens_door_two_ways = int(4 * self.points_per_meter)
+     # Increase overtaking maneuver by distance in meters in the scenario AccidentTwoWays before the obstacle
+-    self.add_before_accident_two_ways = int(-1.5 * self.points_per_meter)
++    self.add_before_accident_two_ways = int(-1.0 * self.points_per_meter) # orginal -1.5
+     # Increase overtaking maneuver by distance in meters in the scenario ConstructionObstacleTwoWays
+     # before the obstacle
+-    self.add_before_construction_obstacle_two_ways = int(1.5 * self.points_per_meter)
++    self.add_before_construction_obstacle_two_ways = int(2.5 * self.points_per_meter) # orginal 1.5
+     # Increase overtaking maneuver by distance in meters in the scenario ParkedObstacleTwoWays before the obstacle
+     self.add_before_parked_obstacle_two_ways = int(-0.5 * self.points_per_meter)
+     # Increase overtaking maneuver by distance in meters in the scenario VehicleOpensDoorTwoWays before the obstacle
+-    self.add_before_vehicle_opens_door_two_ways = int(-2.0 * self.points_per_meter)
++    self.add_before_vehicle_opens_door_two_ways = int(-0.5 * self.points_per_meter) # orginal -2.0
+     # Increase overtaking maneuver by distance in meters in the scenario AccidentTwoWays after the obstacle
+-    self.add_after_accident_two_ways = int(-1.5 * self.points_per_meter)
++    self.add_after_accident_two_ways = int(0.0 * self.points_per_meter) # orginal -1.5
+     # Increase overtaking maneuver by distance in meters in the scenario ConstructionObstacleTwoWays
+     # after the obstacle
+-    self.add_after_construction_obstacle_two_ways = int(1.5 * self.points_per_meter)
++    self.add_after_construction_obstacle_two_ways = int(2.5 * self.points_per_meter) # orginal 1.5
+     # Increase overtaking maneuver by distance in meters in the scenario ParkedObstacleTwoWays after the obstacle
+     self.add_after_parked_obstacle_two_ways = int(-0.5 * self.points_per_meter)
+     # Increase overtaking maneuver by distance in meters in the scenario VehicleOpensDoorTwoWays after the obstacle
+-    self.add_after_vehicle_opens_door_two_ways = int(-2.0 * self.points_per_meter)
++    self.add_after_vehicle_opens_door_two_ways = int(-0.5 * self.points_per_meter) # orginal -2.0
+     # How much to drive to the center of the opposite lane while handling the scenario AccidentTwoWays
+     self.factor_accident_two_ways = 1.0
+     # How much to drive to the center of the opposite lane while handling the scenario ConstructionObstacleTwoWays
+     self.factor_construction_obstacle_two_ways = 1.0
+     # How much to drive to the center of the opposite lane while handling the scenario ParkedObstacleTwoWays
+-    self.factor_parked_obstacle_two_ways = 0.6
++    self.factor_parked_obstacle_two_ways = 0.7 # orginal 0.6
+     # How much to drive to the center of the opposite lane while handling the scenario VehicleOpensDoorTwoWays
+-    self.factor_vehicle_opens_door_two_ways = 0.475
++    self.factor_vehicle_opens_door_two_ways = 0.7 # orginal 0.475
+     # Maximum distance to start the overtaking maneuver
+     self.max_distance_to_overtake_two_way_scnearios = int(8 * self.points_per_meter)
+     # Overtaking speed in m/s for vehicle opens door two ways scenarios
+@@ -330,12 +330,12 @@ class GlobalConfig:
+     # DataAgent
+     # -----------------------------------------------------------------------------
+     # Max and min values by which the augmented camera is shifted left and right
+-    self.camera_translation_augmentation_min = -1.0
+-    self.camera_translation_augmentation_max = 1.0
++    self.camera_translation_augmentation_min = -1.5
++    self.camera_translation_augmentation_max = 1.5
+     # Max and min values by which the augmented camera is rotated around the yaw
+     # Numbers are in degree
+-    self.camera_rotation_augmentation_min = -5.0
+-    self.camera_rotation_augmentation_max = 5.0
++    self.camera_rotation_augmentation_min = -20.0
++    self.camera_rotation_augmentation_max = 20.0
+     # Every data_save_freq frame the data is stored during training
+     # Set to one for backwards compatibility. Released dataset was collected with 5
+     self.data_save_freq = 5
 diff --git a/team_code/data_agent.py b/team_code/data_agent.py
 index 2d14553..1c6fb09 100644
 --- a/team_code/data_agent.py
