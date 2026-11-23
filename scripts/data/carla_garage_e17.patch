@@ -1,0 +1,167 @@
+diff --git a/leaderboard_autopilot/leaderboard/leaderboard_evaluator_local.py b/leaderboard_autopilot/leaderboard/leaderboard_evaluator_local.py
+index 52a0d61..9cb585c 100644
+--- a/leaderboard_autopilot/leaderboard/leaderboard_evaluator_local.py
++++ b/leaderboard_autopilot/leaderboard/leaderboard_evaluator_local.py
+@@ -23,6 +23,7 @@ import signal
+ import socket
+ import numpy as np
+ import torch
++import carla
+ 
+ from srunner.scenariomanager.carla_data_provider import *
+ from srunner.scenariomanager.timer import GameTime
+@@ -233,6 +234,12 @@ class LeaderboardEvaluator(object):
+         self.world.apply_settings(settings)
+ 
+         self.world.reset_all_traffic_lights()
++        if int(os.environ.get('ALL_GREEN', 0)) == 1:
++            # E17 paired junction data (safedrive-vla): every traffic light green and frozen, as in CARLA-F
++            for light in self.world.get_actors().filter('traffic.traffic_light*'):
++                light.set_state(carla.TrafficLightState.Green)
++                light.freeze(True)
++            self.world.tick()
+         CarlaDataProvider.set_client(self.client)
+         CarlaDataProvider.set_traffic_manager_port(self.traffic_manager_port)
+         CarlaDataProvider.set_world(self.world)
+diff --git a/leaderboard_autopilot/leaderboard/scenarios/route_scenario.py b/leaderboard_autopilot/leaderboard/scenarios/route_scenario.py
+index c5e7517..479dcb2 100644
+--- a/leaderboard_autopilot/leaderboard/scenarios/route_scenario.py
++++ b/leaderboard_autopilot/leaderboard/scenarios/route_scenario.py
+@@ -400,8 +400,9 @@ class RouteScenario(BasicScenario):
+         # register var
+         self.scenario_triggerer = scenario_triggerer
+ 
+-        # Add the Background Activity
+-        behavior.add_child(BackgroundBehavior(self.ego_vehicles[0], self.route, name="BackgroundActivity"))
++        # Add the Background Activity (NO_BACKGROUND=1: none, E17 paired junction data in safedrive-vla)
++        if int(os.environ.get('NO_BACKGROUND', 0)) != 1:
++            behavior.add_child(BackgroundBehavior(self.ego_vehicles[0], self.route, name="BackgroundActivity"))
+ 
+         behavior.add_children(scenario_behaviors)
+         return behavior
+diff --git a/team_code/data_agent.py b/team_code/data_agent.py
+index 2d14553..7942ff2 100644
+--- a/team_code/data_agent.py
++++ b/team_code/data_agent.py
+@@ -10,17 +10,26 @@ import numpy as np
+ import json
+ import os
+ import gzip
+-import laspy
+ from shapely.geometry import Polygon
+ from pathlib import Path
+ 
+ from autopilot import AutoPilot
+ import transfuser_utils as t_u
+ 
+-from birds_eye_view.chauffeurnet import ObsManager
+-from birds_eye_view.run_stop_sign import RunStopSign
+ from PIL import Image
+ 
++# RGB_ONLY=1 (E17 paired junction data, safedrive-vla): store only rgb / rgb_augmented /
++# measurements / results.json.gz; no LiDAR, semantics, depth, BEV or boxes (neither sensors
++# nor files). laspy and the BEV renderer are then not imported.
++RGB_ONLY = int(os.environ.get('RGB_ONLY', 0)) == 1
++# KEEP_ROUTE_WEATHER=1: keep the weather of the route XML instead of a random preset, so that
++# the routes of one junction group (same start, different exits) see the same weather.
++KEEP_ROUTE_WEATHER = int(os.environ.get('KEEP_ROUTE_WEATHER', 0)) == 1
++if not RGB_ONLY:
++  import laspy
++  from birds_eye_view.chauffeurnet import ObsManager
++  from birds_eye_view.run_stop_sign import RunStopSign
++
+ from agents.tools.misc import (is_within_distance, get_trafficlight_trigger_location, compute_distance)
+ 
+ from agents.navigation.local_planner import LocalPlanner
+@@ -45,7 +54,10 @@ class DataAgent(AutoPilot):
+     self.scenario_name = Path(path_to_conf_file).parent.name
+     self.cutin_vehicle_starting_position = None
+ 
+-    if self.save_path is not None and self.datagen:
++    if self.save_path is not None and self.datagen and RGB_ONLY:
++      (self.save_path / 'rgb').mkdir()
++      (self.save_path / 'rgb_augmented').mkdir()
++    elif self.save_path is not None and self.datagen:
+       (self.save_path / 'lidar').mkdir()
+       (self.save_path / 'rgb').mkdir()
+       (self.save_path / 'semantics').mkdir()
+@@ -65,9 +77,13 @@ class DataAgent(AutoPilot):
+ 
+   def _init(self, hd_map):
+     super()._init(hd_map)
+-    if self.datagen:
++    if self.datagen and not KEEP_ROUTE_WEATHER:
+       self.shuffle_weather()
+ 
++    self._local_planner = LocalPlanner(self._vehicle, opt_dict={}, map_inst=self.world_map)
++    if RGB_ONLY:
++      return
++
+     obs_config = {
+         'width_in_pixels': self.config.lidar_resolution_width,
+         'pixels_ev_to_bottom': self.config.lidar_resolution_height / 2.0,
+@@ -92,8 +108,6 @@ class DataAgent(AutoPilot):
+     self.ss_bev_manager_augmented.attach_ego_vehicle(self.augmented_vehicle_dummy,
+                                                      criteria_stop=self.stop_sign_criteria)
+ 
+-    self._local_planner = LocalPlanner(self._vehicle, opt_dict={}, map_inst=self.world_map)
+-
+   def sensors(self):
+     # workaraound that only does data augmentation at the beginning of the route
+     if self.config.augment:
+@@ -129,7 +143,13 @@ class DataAgent(AutoPilot):
+           'height': self.config.camera_height,
+           'fov': self.config.camera_fov,
+           'id': 'rgb_augmented'
+-      }, {
++      }]
++
++    if RGB_ONLY:
++      return result
++
++    if self.save_path is not None and (self.datagen or self.tmp_visu):
++      result += [{
+           'type': 'sensor.camera.semantic_segmentation',
+           'x': self.config.camera_pos[0],
+           'y': self.config.camera_pos[1],
+@@ -197,6 +217,12 @@ class DataAgent(AutoPilot):
+   def tick(self, input_data):
+     result = {}
+ 
++    if RGB_ONLY:
++      if self.save_path is not None and self.datagen:
++        result['rgb'] = input_data['rgb'][1][:, :, :3]
++        result['rgb_augmented'] = input_data['rgb_augmented'][1][:, :, :3]
++      return result
++
+     if self.save_path is not None and (self.datagen or self.tmp_visu):
+       rgb = input_data['rgb'][1][:, :, :3]
+       rgb_augmented = input_data['rgb_augmented'][1][:, :, :3]
+@@ -276,7 +302,8 @@ class DataAgent(AutoPilot):
+     self.step_tmp += 1
+ 
+     # Convert LiDAR into the coordinate frame of the ego vehicle
+-    input_data['lidar'] = t_u.lidar_to_ego_coordinate(self.config, input_data['lidar'])
++    if not RGB_ONLY:
++      input_data['lidar'] = t_u.lidar_to_ego_coordinate(self.config, input_data['lidar'])
+ 
+     # Must be called before run_step, so that the correct augmentation shift is saved
+     if self.datagen:
+@@ -290,7 +317,7 @@ class DataAgent(AutoPilot):
+       if self.save_path is not None and self.datagen:
+         self.save_sensors(tick_data)
+ 
+-    self.last_lidar = input_data['lidar']
++    self.last_lidar = input_data.get('lidar')
+     self.last_ego_transform = self._vehicle.get_transform()
+ 
+     if plant:
+@@ -371,6 +398,8 @@ class DataAgent(AutoPilot):
+     # CARLA images are already in opencv's BGR format.
+     cv2.imwrite(str(self.save_path / 'rgb' / (f'{frame:04}.jpg')), tick_data['rgb'])
+     cv2.imwrite(str(self.save_path / 'rgb_augmented' / (f'{frame:04}.jpg')), tick_data['rgb_augmented'])
++    if RGB_ONLY:
++      return
+ 
+     cv2.imwrite(str(self.save_path / 'semantics' / (f'{frame:04}.png')), tick_data['semantics'])
+     cv2.imwrite(str(self.save_path / 'semantics_augmented' / (f'{frame:04}.png')), tick_data['semantics_augmented'])
