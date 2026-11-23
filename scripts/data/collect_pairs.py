@@ -86,6 +86,7 @@ class Slot:
         self.idx, self.gpu, self.port, self.args = idx, gpu, port, args
         self.tm_port = tm_port  # CARLA itself uses port, port+1, port+2
         self.server = None
+        self.attempts = 0  # every attempt gets its own traffic-manager port (a just-closed one may not rebind)
 
     def start_carla(self):
         self.stop_carla()
@@ -144,13 +145,18 @@ class Slot:
             "RGB_ONLY": "1", "KEEP_ROUTE_WEATHER": "1", "NO_BACKGROUND": "1", "ALL_GREEN": str(int(a.all_green)),
             "CUDA_VISIBLE_DEVICES": env.get("CUDA_VISIBLE_DEVICES", ""),
         })
+        tm_port = self.tm_port + self.attempts % 50
+        self.attempts += 1
         cmd = [sys.executable, "-u", str(garage / "leaderboard_autopilot/leaderboard/leaderboard_evaluator_local.py"),
-               f"--port={self.port}", f"--traffic-manager-port={self.tm_port}", f"--traffic-manager-seed={seed}",
+               f"--port={self.port}", f"--traffic-manager-port={tm_port}", f"--traffic-manager-seed={seed}",
                f"--routes={xml}", "--repetitions=1", "--track=MAP", f"--checkpoint={ck}",
                f"--agent={garage / 'team_code/data_agent.py'}", f"--agent-config={xml}", "--debug=0", "--resume=0",
                f"--timeout={a.client_timeout}"]
         t0 = time.time()
         with open(out / "logs" / f"{name}.out", "a") as fo, open(out / "logs" / f"{name}.err", "a") as fe:
+            for f in (fo, fe):  # attempts are appended: mark each one
+                f.write(f"\n===== {time.strftime('%m-%d %H:%M:%S')} slot {self.idx} port {self.port} tm {tm_port} =====\n")
+                f.flush()
             p = subprocess.Popen(cmd, stdout=fo, stderr=fe, env=env, cwd=garage, start_new_session=True)
             try:
                 rc = p.wait(timeout=a.route_timeout)
