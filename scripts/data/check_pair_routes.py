@@ -7,7 +7,8 @@ start lane to the end, |d| <= 30 deg S, < -30 L, > 30 R), whether it matches the
 the straight-line sum (a detour means the planner took another way), the lane (road, lane) of the first trace point,
 and the junction ids the trace passes. Per group (same start lane): do all routes start on the same lane and pass
 the same first junction?
-Writes check/clean_groups.json (groups to collect). Also draws --n-plots groups (stratified by lane position / reach) on top of the lane centre lines around the
+Writes check/clean_groups.json (groups with every route clean) and check/collect.json (routes to collect: bad routes
+dropped one by one; a group stays paired if its straight route and >= 1 turn are good, else its good routes are unpaired). Also draws --n-plots groups (stratified by lane position / reach) on top of the lane centre lines around the
 junction: work_dirs/pair_junctions/check/<group>.png (grey = driving lanes, colours = traced routes, dot = start).
 
     CARLA_ROOT=$P/carla0915 $PY scripts/data/check_pair_routes.py --pairs work_dirs/pair_junctions
@@ -61,10 +62,14 @@ def main():
         d = wrap(wps[-1].transform.rotation.yaw - wps[0].transform.rotation.yaw) if wps else float("nan")
         # lane changes before the first junction (11/23 plots: some leftmost-lane right turns jog across lanes
         # on the approach, so the paired routes no longer share their images before the junction)
+        # A real lane change = the next trace point is not reachable by driving along the lane (w1.next):
+        # lane ids can be renumbered between lane sections of one road, so an id change alone is not one.
         lc = 0
         for w1, w2 in zip(wps, wps[1:]):
             if w2.is_junction: break
-            if w1.road_id == w2.road_id and w1.lane_id != w2.lane_id: lc += 1
+            dd = max(0.5, w1.transform.location.distance(w2.transform.location))
+            if not any(n.transform.location.distance(w2.transform.location) < 0.8 for n in w1.next(dd)):
+                lc += 1
         res.append(dict(route=r["route"], group=f"{town}_j{r['junction']}_r{r['road']}_l{r['lane']}", man=r["man"],
                         traced=man(d), dyaw=round(d, 1), ok=man(d) == r["man"], length=round(length, 1),
                         straight=round(straight, 1), detour=length > 1.3 * straight + 5, lane_changes=lc,
@@ -86,8 +91,23 @@ def main():
         lines.append(f"  {x['route']:40s} intended {x['man']} traced {x['traced']} dyaw {x['dyaw']:+.0f} len {x['length']} / {x['straight']}")
     text = "\n".join(lines); print(text)
     clean = sorted(g for g, xs in groups.items() if g not in bad_group and all(x["ok"] and not x["detour"] and not x["lane_changes"] for x in xs))
+    # Routes to collect (11/23, tia: a lane that can turn right from the leftmost position is a valid case):
+    # drop only the bad routes; keep a group as a pair when its straight route and >= 1 turn are good,
+    # otherwise keep its good routes as unpaired samples.
+    good = lambda x: x["ok"] and not x["detour"] and not x["lane_changes"]
+    collect = {"paired": {}, "unpaired": {}}
+    for g, xs in groups.items():
+        if g in bad_group: continue
+        ok = [x["route"] for x in xs if good(x)]
+        mans = {x["man"] for x in xs if good(x)}
+        if "S" in mans and mans & {"L", "R"}: collect["paired"][g] = ok
+        elif ok: collect["unpaired"][g] = ok
     (root / "check").mkdir(exist_ok=True)
     json.dump(clean, open(root / "check" / "clean_groups.json", "w"))
+    json.dump(collect, open(root / "check" / "collect.json", "w"), indent=1)
+    extra = (f"collect.json: paired groups {len(collect['paired'])} ({sum(map(len, collect['paired'].values()))} routes), "
+             f"unpaired groups {len(collect['unpaired'])} ({sum(map(len, collect['unpaired'].values()))} routes)")
+    print(extra); text += "\n" + extra
     (root / "check" / "summary.txt").write_text(text + "\n")
     json.dump(res, open(root / "check" / "check.json", "w"))
 
