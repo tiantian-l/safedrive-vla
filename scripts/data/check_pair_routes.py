@@ -59,9 +59,15 @@ def main():
             if w.is_junction and (not juncs or juncs[-1] != w.get_junction().id):
                 juncs.append(w.get_junction().id)
         d = wrap(wps[-1].transform.rotation.yaw - wps[0].transform.rotation.yaw) if wps else float("nan")
+        # lane changes before the first junction (11/23 plots: some leftmost-lane right turns jog across lanes
+        # on the approach, so the paired routes no longer share their images before the junction)
+        lc = 0
+        for w1, w2 in zip(wps, wps[1:]):
+            if w2.is_junction: break
+            if w1.road_id == w2.road_id and w1.lane_id != w2.lane_id: lc += 1
         res.append(dict(route=r["route"], group=f"{town}_j{r['junction']}_r{r['road']}_l{r['lane']}", man=r["man"],
                         traced=man(d), dyaw=round(d, 1), ok=man(d) == r["man"], length=round(length, 1),
-                        straight=round(straight, 1), detour=length > 1.3 * straight + 5,
+                        straight=round(straight, 1), detour=length > 1.3 * straight + 5, lane_changes=lc,
                         start_lane=[wps[0].road_id, wps[0].lane_id] if wps else None, junctions=juncs, pos=r["pos"],
                         reach=r["reach"], xy=[[round(w.transform.location.x, 1), round(w.transform.location.y, 1)] for w in wps[::2]]))
     groups = collections.defaultdict(list)
@@ -72,13 +78,14 @@ def main():
              f"traced manoeuvre == intended: {sum(x['ok'] for x in res)} / {len(res)}",
              f"detours (traced > 1.3 x straight + 5 m): {sum(x['detour'] for x in res)}",
              f"groups whose routes start on different lanes or pass a different first junction: {len(bad_group)}",
-             f"groups fully clean (all routes ok, no detour, same start lane & junction): "
-             f"{sum(1 for g, xs in groups.items() if g not in bad_group and all(x['ok'] and not x['detour'] for x in xs))}",
+             f"routes with a lane change before the junction: {sum(x['lane_changes'] > 0 for x in res)}",
+             f"groups fully clean (all routes ok, no detour, no lane change before the junction, same start lane & junction): "
+             f"{sum(1 for g, xs in groups.items() if g not in bad_group and all(x['ok'] and not x['detour'] and not x['lane_changes'] for x in xs))}",
              "", "mismatches (first 30):"]
     for x in [x for x in res if not x["ok"] or x["detour"]][:30]:
         lines.append(f"  {x['route']:40s} intended {x['man']} traced {x['traced']} dyaw {x['dyaw']:+.0f} len {x['length']} / {x['straight']}")
     text = "\n".join(lines); print(text)
-    clean = sorted(g for g, xs in groups.items() if g not in bad_group and all(x["ok"] and not x["detour"] for x in xs))
+    clean = sorted(g for g, xs in groups.items() if g not in bad_group and all(x["ok"] and not x["detour"] and not x["lane_changes"] for x in xs))
     (root / "check").mkdir(exist_ok=True)
     json.dump(clean, open(root / "check" / "clean_groups.json", "w"))
     (root / "check" / "summary.txt").write_text(text + "\n")
@@ -107,7 +114,7 @@ def main():
         if ln: ax.scatter([p[0] for p in ln], [p[1] for p in ln], s=1, c="0.8")
         for x in xs:
             ax.plot([p[0] for p in x["xy"]], [p[1] for p in x["xy"]], c=col.get(x["man"], "k"), lw=2,
-                    label=f"{x['man']} (traced {x['traced']}{', detour' if x['detour'] else ''})")
+                    label=f"{x['man']} (traced {x['traced']}{', detour' if x['detour'] else ''}{', lane change' if x['lane_changes'] else ''})")
             ax.scatter([x["xy"][0][0]], [x["xy"][0][1]], c="k", s=30, zorder=5)
         ax.set_aspect("equal"); ax.invert_yaxis()   # CARLA y points down on a map image
         ax.set_title(f"{g}\n{xs[0]['pos']} reach {xs[0]['reach']}", fontsize=9); ax.legend(fontsize=8)
