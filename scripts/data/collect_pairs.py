@@ -82,9 +82,9 @@ def port_open(port, host="127.0.0.1"):
 
 
 class Slot:
-    def __init__(self, idx, gpu, port, args):
+    def __init__(self, idx, gpu, port, tm_port, args):
         self.idx, self.gpu, self.port, self.args = idx, gpu, port, args
-        self.tm_port = port + 50  # CARLA itself uses port, port+1, port+2
+        self.tm_port = tm_port  # CARLA itself uses port, port+1, port+2
         self.server = None
 
     def start_carla(self):
@@ -181,7 +181,7 @@ def cmd_run(a):
     for j in todo:
         q.put((j, 0))
     gpus = [int(g) for g in a.gpu_ids.split(",")]
-    slots = [Slot(i, g, a.base_port + 100 * i, a) for i, g in enumerate(gpus)]
+    slots = [Slot(i, g, a.base_port + 100 * i, a.base_tm_port + 100 * i, a) for i, g in enumerate(gpus)]
     stats = {"done": 0, "fail": 0}
     lock = threading.Lock()
 
@@ -299,8 +299,11 @@ def main():
     r = sub.choices["run"]
     r.add_argument("--garage", default="../carla_garage")
     r.add_argument("--gpu-ids", default="0,0")
-    # eval (tools/run_distributed_eval.py) uses 2000 + 100 i; stop_carla() pkills by port -> stay clear of it
-    r.add_argument("--base-port", type=int, default=21000)
+    # Ports below the ephemeral range (11/23 trial 2262084: traffic manager on 21050 failed with a bind error,
+    # the port was taken by an outgoing connection). eval (tools/run_distributed_eval.py) uses CARLA 2000 + 100 i
+    # and traffic manager 8000 + 100 i; stop_carla() pkills by port -> CARLA 4000 + 100 i, TM 6000 + 100 i.
+    r.add_argument("--base-port", type=int, default=4000)
+    r.add_argument("--base-tm-port", type=int, default=6000)
     r.add_argument("--carla-wait", type=int, default=180, help="seconds to wait for a server")
     r.add_argument("--stagger", type=int, default=20, help="seconds between server starts")
     r.add_argument("--route-timeout", type=int, default=1200, help="seconds per route attempt")
