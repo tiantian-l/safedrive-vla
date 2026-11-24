@@ -335,13 +335,15 @@ def cmd_report(a):
         missing = sorted({"ego_matrix", "speed", "command", "next_command", "route", "junction", "target_point",
                           "speed_limit", "augmentation_translation", "augmentation_rotation"} - set(ms[0])) if ms else ["all"]
         rows.append((name, n, res["scores"], res["num_infractions"], clean(res), seq, first_j, extra, missing,
-                     ms[-1]["speed"] if ms else None))
+                     ms[-1]["speed"] if ms else None, sum(bool(m.get("light_hazard")) for m in ms)))
     print(f"{len(rows)} collected routes under {out}")
-    for name, n, sc, ninf, cl, seq, fj, extra, missing, vend in rows:
+    for name, n, sc, ninf, cl, seq, fj, extra, missing, vend, lh in rows:
         print(f"\n{name}: rgb {n['rgb']} / aug {n['rgb_augmented']} / meas {n['measurements']}  "
               f"score route {sc['score_route']:.1f} composed {sc['score_composed']:.1f} infractions {ninf}  clean {cl}")
         print("  commands (4 Hz, * = junction): " + " ".join(f"{c}x{k}" for c, k in seq))
         print(f"  first junction frame {fj}; end speed {vend:.1f} m/s; other files {extra}; missing fields {missing}")
+        if lh:
+            print(f"  WARNING: light_hazard in {lh} frames (a red light: ALL_GREEN not effective?)")
     print("\ngroups (start distance between routes, first junction frame):")
     for g, items in by_group.items():
         if len(items) < 2:
