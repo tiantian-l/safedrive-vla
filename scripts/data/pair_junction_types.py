@@ -85,6 +85,7 @@ def main():
     ap.add_argument("--test", default="work_dirs/diag/lane_test.json")
     ap.add_argument("--trial", type=int, default=8, help="groups for the second trial (trial2_groups.txt)")
     ap.add_argument("--red", type=int, default=120, help="traffic-light groups for the red-light data (redlight_groups.txt)")
+    ap.add_argument("--like", type=int, default=12, help="groups like each CARLA-F failure type (likefail_groups.txt)")
     a = ap.parse_args()
     pairs = REPO / a.pairs
     man = {r["route"]: r for r in json.load(open(pairs / "manifest.json"))}
@@ -155,6 +156,21 @@ def main():
     rng2 = random.Random(1)
     red = sorted(rng2.sample(light, min(a.red, len(light))))
     (pairs / "redlight_groups.txt").write_text(",".join(red) + "\n")
+    # groups most like the CARLA-F straight failures (11/24): 55 / 56 / 218 = Town12, light, 4 arms, leftmost of 2+ lanes,
+    # lane can go L and S; 17 = Town12, light, 4 arms, single lane. --like groups of each (paired, with S), all = fewer.
+    def like(x, single):
+        return (x["kind"] == "paired" and x["town"] == "Town12" and x.get("control") == "light" and x.get("arms") == 4
+                and "S" in x["routes"] and (x["pos"] == "single" if single else
+                                            (x["pos"] == "leftmost" and (x.get("lanes_same") or 0) >= 2 and "L" in x["reach"])))
+    rng3 = random.Random(2)
+    like55 = sorted(g for g, x in groups.items() if like(x, False))
+    like17 = sorted(g for g, x in groups.items() if like(x, True))
+    pick55 = sorted(rng3.sample(like55, min(a.like, len(like55))))
+    pick17 = sorted(rng3.sample(like17, min(a.like, len(like17))))
+    (pairs / "likefail_groups.txt").write_text(",".join(pick55 + pick17) + "\n")
+    lines += [f"like 55/56/218 (Town12 light 4-arm leftmost 2+ lanes, L+S): {len(like55)} groups, picked {len(pick55)}",
+              f"like 17 (Town12 light 4-arm single lane): {len(like17)} groups, picked {len(pick17)}",
+              f"  -> likefail_groups.txt, {sum(len(groups[g]['routes']) for g in pick55 + pick17)} routes"]
     lines += ["", f"red-light groups: {len(red)} of {len(light)} traffic-light groups, "
               f"{sum(len(groups[g]['routes']) for g in red)} routes (redlight_groups.txt)"]
     lines += ["", f"second trial groups ({len(pick)}, in trial2_groups.txt):"]
