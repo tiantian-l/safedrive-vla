@@ -14,7 +14,8 @@ successor, lane > 0: predecessor); for the paired routes it is checked against t
 Inputs: work_dirs/pair_junctions/{manifest.json, check/collect.json}; for comparison (statistics only, never for
 training) the CARLA-F approach lanes of work_dirs/diag/lane_test.json (lane_position.py) if present.
 Output: <pairs>/junction_types.json (per group), junction_types.txt (tables), trial2_groups.txt (one paired
-group per town / control / lanes cell, traffic-light junctions first; for collect_pairs.py --groups @file).
+group per town / control / lanes cell, traffic-light junctions first; for collect_pairs.py --groups @file),
+redlight_groups.txt (--red traffic-light groups for the red-light data, collected with --no-all-green).
 
     CARLA_ROOT=$P/carla0915 python scripts/data/pair_junction_types.py --pairs work_dirs/pair_junctions
 """
@@ -83,6 +84,7 @@ def main():
     ap.add_argument("--pairs", default="work_dirs/pair_junctions")
     ap.add_argument("--test", default="work_dirs/diag/lane_test.json")
     ap.add_argument("--trial", type=int, default=8, help="groups for the second trial (trial2_groups.txt)")
+    ap.add_argument("--red", type=int, default=120, help="traffic-light groups for the red-light data (redlight_groups.txt)")
     a = ap.parse_args()
     pairs = REPO / a.pairs
     man = {r["route"]: r for r in json.load(open(pairs / "manifest.json"))}
@@ -147,6 +149,14 @@ def main():
     order = sorted(cells, key=lambda k: (k[1] != "light", not k[0], not k[2]))
     pick = [rng.choice(sorted(cells[k])) for k in order][: a.trial]
     (pairs / "trial2_groups.txt").write_text(",".join(pick) + "\n")
+    # red-light data ([C], 11/24): traffic-light groups collected with normal light cycles (collect_pairs --no-all-green);
+    # the expert stops at red on part of them. Town12 and old towns, paired and unpaired, random --red groups.
+    light = sorted(g for g, x in groups.items() if x.get("control") == "light")
+    rng2 = random.Random(1)
+    red = sorted(rng2.sample(light, min(a.red, len(light))))
+    (pairs / "redlight_groups.txt").write_text(",".join(red) + "\n")
+    lines += ["", f"red-light groups: {len(red)} of {len(light)} traffic-light groups, "
+              f"{sum(len(groups[g]['routes']) for g in red)} routes (redlight_groups.txt)"]
     lines += ["", f"second trial groups ({len(pick)}, in trial2_groups.txt):"]
     lines += [f"  {g}: {groups[g]['town']} {groups[g].get('control')} arms {groups[g].get('arms')} lanes "
               f"{groups[g].get('lanes_same')}/{groups[g].get('lanes_total')} {groups[g]['pos']} routes {groups[g]['routes']}"
