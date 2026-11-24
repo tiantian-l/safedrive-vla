@@ -445,6 +445,8 @@ class SafeDriveAgent(autonomous_agent.AutonomousAgent):
                 "speed_cap": getattr(self, "speed_cap", None),
                 # --instr-filter (scheme B): {"dir", "heading", "reject", "held"} of this tick (None = off)
                 "filter": getattr(self, "filter_state", None),
+                # --turn-hold ([21]): {"meta", "turned", "ticks"} while a completed turn keeps its anchor, {"end", ...} on release
+                "hold": getattr(self, "hold_state", None),
                 # ego frame, x forward, y right (m): path head (None without <ACTIONS>)
                 # and the action-token trajectory, for the junction diagnosis
                 "path": None if path is None else np.round(np.asarray(path, dtype=np.float64)[:, :2], 2).tolist(),

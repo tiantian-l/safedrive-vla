@@ -29,6 +29,7 @@ import py_trees
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 
 from safedrive_vla.constants import META_COMMAND_TO_INDEX, TASK_PROMPT
+from team_code import simlingo_utils as utils
 from team_code.agent_safedrive import FORCE_MODE, SafeDriveAgent
 
 INSTRUCTION_META_COMMANDS = Path(__file__).resolve().parent / "instruction_meta_commands.json"
@@ -56,6 +57,17 @@ CURVE_VMIN = float(os.environ.get("SAFEDRIVE_CURVE_VMIN", "4.0"))   # never cap 
 CURVE_R_APPLY = 50.0   # bends with R >= 50 m are not capped
 CURVE_SPAN = 4         # circumradius of path points (i, i+4, i+8), 1 m spacing ...
 CURVE_I_MAX = 10       # ... for i = 0..10 (first ~18 m of the path)
+# [21] turn-anchor hold (11/24): the completion monitor ends a turn instruction when the route planner is back
+# to lane following - at the same place along the route as in training, but the model's car has turned only
+# 3-18 deg there (103 / 10) while the expert of the training data has turned 24-61 deg. Training never shows a
+# follow-road anchor that early in a turn. After a turn instruction completes, keep its turn anchor (prompt and
+# schedule unchanged) until the ego heading (IMU) has changed by DEG since the instruction started, at most
+# TMAX s, or until the next instruction becomes active. SAFEDRIVE_TURN_HOLD = "DEG,TMAX" (e.g. 50,1.5); empty = off.
+_HOLD_ARGS = [x for x in os.environ.get("SAFEDRIVE_TURN_HOLD", "").split(",") if x.strip()]
+TURN_HOLD = len(_HOLD_ARGS) == 2
+TURN_HOLD_DEG = float(_HOLD_ARGS[0]) if TURN_HOLD else 0.0
+TURN_HOLD_TICKS = int(round(float(_HOLD_ARGS[1]) * 20)) if TURN_HOLD else 0   # 20 Hz
+TURN_METAS = ("turn_left", "turn_right")
 
 
 # Scheme B / idea [13] (11/21): instruction-consistency filter on the path head's path. The direction
@@ -154,6 +166,7 @@ class Instruction:
     is_active: bool = False
     start_distance: float = 0.0
     planner_command_seen: bool = False
+    start_yaw: Optional[float] = None   # IMU heading when the instruction became active ([21])
 
 
 class SafeDriveLanguageAgent(SafeDriveAgent):
@@ -166,6 +179,8 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
     NORMALIZE_INSTRUCTION = True
     # --instr-filter (scheme B) only for CARLA-F; the conflict agent keeps the model's path.
     INSTR_FILTER = True
+    # --turn-hold ([21]) only for CARLA-F
+    TURN_HOLD = True
 
     def setup(self, path_to_conf_file):
         super().setup(path_to_conf_file)
@@ -181,6 +196,10 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
         with open(self.META_COMMAND_TABLE) as f:
             self.instruction_meta_commands = {_normalize(k): v for k, v in json.load(f).items()}
         self.instruction = "follow the road"
+        self.yaw: Optional[float] = None
+        self.n_ticks = 0
+        self.turn_hold = None    # {"meta", "start_yaw", "tick"} while a completed turn keeps its anchor
+        self.hold_state = None   # debug: {"meta", "turned", "ticks"} or {"end": reason}
 
     def _parse_route_xml(self, path: str) -> None:
         route = ET.parse(path).getroot().find(".//route")
@@ -262,6 +281,7 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
                 if not instr.is_active:
                     instr.is_active = True
                     instr.start_distance = self.distance_traveled
+                    instr.start_yaw = self.yaw
                 if instr.duration_meters > 0 and self.distance_traveled > instr.start_distance + instr.duration_meters:
                     triggered = False
             if triggered:
@@ -278,12 +298,20 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
             instr.planner_command_seen = True
         progress = self.distance_traveled - instr.start_distance
         if instr.planner_command_seen and current_command == LANE_FOLLOW_COMMAND and progress >= COMPLETION_MIN_PROGRESS_M:
+            meta = self.instruction_meta_commands.get(_normalize(instr.text))
+            if TURN_HOLD and self.TURN_HOLD and meta in TURN_METAS and instr.start_yaw is not None:
+                self.turn_hold = {"meta": meta, "start_yaw": instr.start_yaw, "tick": self.n_ticks}
             self.completed_ids.add(instr.id)
             instr.is_active = False
             self.current_instruction = None
             self.instruction = "follow the road"
 
     def tick(self, input_data):
+        self.n_ticks += 1
+        try:
+            self.yaw = float(utils.preprocess_compass(input_data["imu"][1][-1]))
+        except Exception:
+            pass
         location = self._ego_location()
         if location is not None:
             if self.last_location is not None:
@@ -462,7 +490,24 @@ class SafeDriveLanguageAgent(SafeDriveAgent):
                 return kind
         return None
 
+    def _held_turn_meta(self) -> Optional[str]:
+        """[21]: the turn meta-command a just-completed turn instruction still holds, else None."""
+        h = self.turn_hold
+        if h is None:
+            self.hold_state = None
+            return None
+        turned = abs(math.degrees((self.yaw - h["start_yaw"] + math.pi) % (2 * math.pi) - math.pi)) if self.yaw is not None else 0.0
+        ticks = self.n_ticks - h["tick"]
+        end = ("next_instruction" if self.current_instruction is not None else
+               "turned" if turned >= TURN_HOLD_DEG else "time" if ticks > TURN_HOLD_TICKS else None)
+        if end is not None:
+            self.turn_hold = None
+            self.hold_state = {"end": end, "turned": round(turned, 1), "ticks": ticks}
+            return None
+        self.hold_state = {"meta": h["meta"], "turned": round(turned, 1), "ticks": ticks}
+        return h["meta"]
+
     def anchor_meta_command(self) -> int:
-        """Meta-command parsed from the instruction text."""
-        meta = self.meta_command_name()
+        """Meta-command parsed from the instruction text ([21]: or the held turn)."""
+        meta = self._held_turn_meta() or self.meta_command_name()
         return META_COMMAND_TO_INDEX[meta] if meta is not None else -1

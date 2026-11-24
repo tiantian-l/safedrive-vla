@@ -22,6 +22,9 @@
 #                               instruction's direction (keywords of its text) by > TH deg; keep the last
 #                               accepted path for <= TMAX s. Not during target-speed instructions, not in
 #                               B2D-C (SAFEDRIVE_INSTR_FILTER, e.g. 30,1.0; empty = off)
+#   --turn-hold DEG,TMAX        CARLA-F ([21]): after a turn instruction completes, keep its turn anchor
+#                               until the heading changed DEG since it started, at most TMAX s
+#                               (SAFEDRIVE_TURN_HOLD, e.g. 50,1.5; empty = off)
 #   --no-creep                  never force the ego to creep after standing still for
 #                               stuck_threshold ticks (SAFEDRIVE_NO_CREEP)
 #   --force-mode NAME           DIAGNOSTIC: teacher-force the driving-mode token (SAFEDRIVE_FORCE_MODE):
@@ -52,6 +55,7 @@ export SAFEDRIVE_FORCE_MODE="${SAFEDRIVE_FORCE_MODE:-}"
 export SAFEDRIVE_DUMP="${SAFEDRIVE_DUMP:-0}"
 export SAFEDRIVE_CURVE_ALAT="${SAFEDRIVE_CURVE_ALAT:-0}"
 export SAFEDRIVE_INSTR_FILTER="${SAFEDRIVE_INSTR_FILTER:-}"
+export SAFEDRIVE_TURN_HOLD="${SAFEDRIVE_TURN_HOLD:-}"
 ROUTE_WALLTIME=14400
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -68,6 +72,7 @@ while [[ $# -gt 0 ]]; do
     --dump)       SAFEDRIVE_DUMP="1"; shift ;;
     --curve-speed) SAFEDRIVE_CURVE_ALAT="$2"; shift 2 ;;
     --instr-filter) SAFEDRIVE_INSTR_FILTER="$2"; shift 2 ;;
+    --turn-hold) SAFEDRIVE_TURN_HOLD="$2"; shift 2 ;;
     --route-walltime) ROUTE_WALLTIME="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
@@ -97,7 +102,7 @@ if [[ -z "${OUTPUT_DIR}" ]]; then
 fi
 export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"
 export TOKENIZERS_PARALLELISM=false
-echo "debug_log=${SAFEDRIVE_DEBUG_LOG} instr_norm=${SAFEDRIVE_INSTR_NORM} no_creep=${SAFEDRIVE_NO_CREEP} force_mode=${SAFEDRIVE_FORCE_MODE:-off} save_viz=${SAFEDRIVE_SAVE_VIZ} dump=${SAFEDRIVE_DUMP} curve_alat=${SAFEDRIVE_CURVE_ALAT} instr_filter=${SAFEDRIVE_INSTR_FILTER:-off}"
+echo "debug_log=${SAFEDRIVE_DEBUG_LOG} instr_norm=${SAFEDRIVE_INSTR_NORM} no_creep=${SAFEDRIVE_NO_CREEP} force_mode=${SAFEDRIVE_FORCE_MODE:-off} save_viz=${SAFEDRIVE_SAVE_VIZ} dump=${SAFEDRIVE_DUMP} curve_alat=${SAFEDRIVE_CURVE_ALAT} instr_filter=${SAFEDRIVE_INSTR_FILTER:-off} turn_hold=${SAFEDRIVE_TURN_HOLD:-off}"
 
 python tools/run_distributed_eval.py \
   --routes-dir "${ROUTES_DIR}" \

@@ -30,3 +30,4 @@ class SafeDriveConflictAgent(SafeDriveLanguageAgent):
     UNKNOWN_META_COMMAND = "follow_road"
     NORMALIZE_INSTRUCTION = False
     INSTR_FILTER = False   # scheme B (--instr-filter) off: B2D-C instructions may ask for something unsafe
+    TURN_HOLD = False      # [21] --turn-hold only for CARLA-F
