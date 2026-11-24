@@ -193,12 +193,25 @@ class Slot:
                 f.write(f"\n===== {time.strftime('%m-%d %H:%M:%S')} slot {self.idx} port {self.port} tm {tm_port} =====\n")
                 f.flush()
             p = subprocess.Popen(cmd, stdout=fo, stderr=fe, env=env, cwd=garage, start_new_session=True)
-            try:
-                rc = p.wait(timeout=a.route_timeout)
-            except subprocess.TimeoutExpired:
-                os.killpg(p.pid, signal.SIGKILL)
-                p.wait()
-                rc = "timeout"
+            # The evaluator can hang on shutdown after the route is written (trial 2267583, slot 3): poll, and once the
+            # route is finished give it --exit-grace seconds before killing it.
+            rc, done_at = None, None
+            while rc is None:
+                try:
+                    rc = p.wait(timeout=5)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+                now = time.time()
+                if done_at is None and finished(out, kind, name):
+                    done_at = now
+                if (done_at is not None and now - done_at > a.exit_grace) or now - t0 > a.route_timeout:
+                    try:
+                        os.killpg(p.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    p.wait()
+                    rc = "killed_after_done" if done_at is not None else "timeout"
         ok = finished(out, kind, name)
         with open(err_file, "rb") as fe:
             fe.seek(err_pos)
@@ -359,6 +372,7 @@ def main():
     r.add_argument("--stagger", type=int, default=20, help="seconds between server starts")
     r.add_argument("--route-timeout", type=int, default=600, help="seconds per route attempt (trials: 28-205 s)")
     r.add_argument("--client-timeout", type=int, default=600)
+    r.add_argument("--exit-grace", type=int, default=30, help="seconds an evaluator may linger after its route is written")
     r.add_argument("--max-tries", type=int, default=3)
     r.add_argument("--no-all-green", dest="all_green", action="store_false")
     a, unknown = ap.parse_known_args()
