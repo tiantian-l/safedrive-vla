@@ -117,6 +117,8 @@ class Slot:
         self.tm_port = tm_port  # CARLA itself uses port, port+1, port+2
         self.server = None
         self.attempts = 0  # every attempt gets its own traffic-manager port (a just-closed one may not rebind)
+        self.bind_error = False  # last attempt died creating the traffic manager (rpc bind error)
+        self.bind_errors_in_row = 0
 
     def start_carla(self):
         self.stop_carla()
@@ -184,7 +186,9 @@ class Slot:
                f"--agent={garage / 'team_code/data_agent.py'}", f"--agent-config={xml}", "--debug=0", "--resume=0",
                f"--timeout={a.client_timeout}"]
         t0 = time.time()
-        with open(out / "logs" / f"{name}.out", "a") as fo, open(out / "logs" / f"{name}.err", "a") as fe:
+        err_file = out / "logs" / f"{name}.err"
+        err_pos = err_file.stat().st_size if err_file.exists() else 0
+        with open(out / "logs" / f"{name}.out", "a") as fo, open(err_file, "a") as fe:
             for f in (fo, fe):  # attempts are appended: mark each one
                 f.write(f"\n===== {time.strftime('%m-%d %H:%M:%S')} slot {self.idx} port {self.port} tm {tm_port} =====\n")
                 f.flush()
@@ -196,6 +200,9 @@ class Slot:
                 p.wait()
                 rc = "timeout"
         ok = finished(out, kind, name)
+        with open(err_file, "rb") as fe:
+            fe.seek(err_pos)
+            self.bind_error = (not ok) and b"traffic manager; but the system failed to create because of bind error" in fe.read()
         with open(out / "collect_status.jsonl", "a") as f:
             f.write(json.dumps(dict(route=name, group=group, kind=kind, slot=self.idx, rc=rc, ok=ok,
                                     sec=round(time.time() - t0), t=time.strftime("%m-%d %H:%M:%S"))) + "\n")
@@ -241,6 +248,13 @@ def cmd_run(a):
             ok = slot.run_route(*job)
             with lock:
                 stats["done" if ok else "fail"] += 1
+            if not ok and slot.bind_error and slot.bind_errors_in_row < 10:
+                # traffic manager could not bind (trials 2264767 / 2267583, even on a port tested free): the server
+                # is fine -> retry at once on the next port, keep the server, do not use up a try
+                slot.bind_errors_in_row += 1
+                q.put((job, tries))
+                continue
+            slot.bind_errors_in_row = 0
             if ok:
                 fails_in_row = 0
             else:
@@ -338,12 +352,12 @@ def main():
     r.add_argument("--gpu-ids", default="0,0")
     # Ports below the ephemeral range (11/23 trial 2262084: traffic manager on 21050 failed with a bind error,
     # the port was taken by an outgoing connection). eval (tools/run_distributed_eval.py) uses CARLA 2000 + 100 i
-    # and traffic manager 8000 + 100 i; stop_carla() pkills by port -> CARLA 4000 + 100 i, TM 6000 + 100 i.
+    # and traffic manager 8000 + 100 i; stop_carla() pkills by port -> CARLA 4000 + 100 i, TM 61000 + 100 i.
     r.add_argument("--base-port", type=int, default=4000)
-    r.add_argument("--base-tm-port", type=int, default=6000)
+    r.add_argument("--base-tm-port", type=int, default=61000)  # above the ephemeral range (32768-60999 on ln01)
     r.add_argument("--carla-wait", type=int, default=180, help="seconds to wait for a server")
     r.add_argument("--stagger", type=int, default=20, help="seconds between server starts")
-    r.add_argument("--route-timeout", type=int, default=1200, help="seconds per route attempt")
+    r.add_argument("--route-timeout", type=int, default=600, help="seconds per route attempt (trials: 28-205 s)")
     r.add_argument("--client-timeout", type=int, default=600)
     r.add_argument("--max-tries", type=int, default=3)
     r.add_argument("--no-all-green", dest="all_green", action="store_false")
