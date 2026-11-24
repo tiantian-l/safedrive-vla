@@ -60,6 +60,16 @@ def route_jobs(pairs_dir, groups=None, limit=0):
     return jobs
 
 
+def parse_groups(arg):
+    """"g1,g2" or "@file" (comma / whitespace separated, path relative to the repository)."""
+    if not arg:
+        return None
+    if arg.startswith("@"):
+        p = Path(arg[1:])
+        arg = (p if p.is_absolute() else REPO / p).read_text()
+    return {g for g in arg.replace(",", " ").split() if g}
+
+
 def route_dirs(out, kind, name):
     return sorted(glob.glob(str(out / "data/simlingo/e17/routes_training" / kind / f"*_Rep0_{name}_route*")))
 
@@ -201,7 +211,7 @@ def cmd_run(a):
         sys.exit(f"no carla_garage at {a.garage}")
     if "RGB_ONLY" not in open(a.garage / "team_code/data_agent.py").read():
         sys.exit("carla_garage without the E17 switches (RGB_ONLY ...): git pull the fork")
-    jobs = route_jobs(REPO / a.pairs, set(a.groups.split(",")) if a.groups else None, a.limit_groups)
+    jobs = route_jobs(REPO / a.pairs, parse_groups(a.groups), a.limit_groups)
     todo = [j for j in jobs if not finished(a.out, j[0], j[2])]
     log(f"{len(jobs)} routes ({len({j[1] for j in jobs})} groups), {len(jobs) - len(todo)} already done, {len(todo)} to do")
     q = queue.Queue()
@@ -268,7 +278,7 @@ def clean(results):
 
 def cmd_report(a):
     out = (REPO / a.out) if not os.path.isabs(a.out) else Path(a.out)
-    jobs = route_jobs(REPO / a.pairs, set(a.groups.split(",")) if a.groups else None, a.limit_groups)
+    jobs = route_jobs(REPO / a.pairs, parse_groups(a.groups), a.limit_groups)
     CMD = {1: "L", 2: "R", 3: "S", 4: "F", 5: "lcL", 6: "lcR"}
     rows, by_group = [], {}
     for kind, g, name, xml, seed in jobs:
@@ -321,7 +331,7 @@ def main():
         p = sub.add_parser(name)
         p.add_argument("--pairs", default="work_dirs/pair_junctions")
         p.add_argument("--out", default="database/e17_pairs")
-        p.add_argument("--groups", default="", help="comma separated group names from collect.json")
+        p.add_argument("--groups", default="", help="comma separated group names from collect.json, or @file")
         p.add_argument("--limit-groups", type=int, default=0)
     r = sub.choices["run"]
     r.add_argument("--garage", default="../carla_garage")
