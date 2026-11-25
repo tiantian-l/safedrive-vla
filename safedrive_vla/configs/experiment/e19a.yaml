@@ -1,0 +1,42 @@
+# @package _global_
+#
+# E19a (11/25): short fine-tune of the released SafeDriveVLA (same recipe as E14 / ft_relabel, without the
+# junction relabelling) with
+#   [28] red-light dreams: database/e17_red (training towns, normal light cycle) frames where the expert is held
+#        by a red light (braking towards the line / waiting) + a "do not stop at the light" instruction ->
+#        unsafe dream (expert trajectory + FALLBACK), evaluation prompt format; own bucket, 3% of all samples,
+#        taken from the SimLingo dreaming share (driving buckets incl. leading_object_traffic.traffic_light unchanged).
+#        Prerequisite: scripts/data/build_red_dreams.py --root database/e17_red
+#   [29] speed dreams (target_speed / faster / slower) rephrased with natural-language templates in the
+#        evaluation prompt format with probability p (label unchanged).
+# Sentence libraries checked against every evaluation instruction: scripts/data/check_sentences.py.
+#   4 GPUs x 12 x accumulate 2 = 96 / step; 1560 steps = ~150k samples; checkpoints at 780 and 1560.
+#   After training: scripts/tools/merge_ft_ckpt.py -> a model.ckpt the agent loads.
+# Ablation: data.extra_dreaming=[] (no [28]) or data.speed_sentences.p=0 (no [29]).
+
+defaults:
+  - safedrive_vla
+  - _self_
+
+name: e19a
+gpus: 4
+strategy: ddp
+max_steps: 1560
+save_every_n_steps: 780
+accumulate_grad_batches: 2
+limit_val_batches: 50
+
+model:
+  lr: 1e-5
+  init_ckpt: ckpts/safedrive-vla/safedrive_vla/model.ckpt
+  freeze_vision: true
+
+data:
+  dreaming_fraction: 0.5
+  extra_dreaming:
+    - name: red_light
+      root: database/e17_red
+      weight: 0.03
+  speed_sentences:
+    path: safedrive_vla/assets/speed_sentences.json
+    p: 0.5

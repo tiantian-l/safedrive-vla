@@ -55,6 +55,14 @@ EXTRAPOLATION_MIN_SPEED = 0.5
 
 # Action-dreaming categories whose instruction asks for a speed.
 SPEED_DREAM_CATEGORIES = frozenset({"target_speed", "faster", "faster_factor", "slower", "slower_factor", "stop"})
+# [29]: speed dreams whose target speed is an absolute number (the factor ones say "x times faster").
+SPEED_REPHRASE_CATEGORIES = frozenset({"target_speed", "faster", "slower"})
+
+
+def format_speed(v: float) -> str:
+    """Speed as the evaluation instructions write it: whole numbers without decimals, else one decimal."""
+    r = round(v * 2.0) / 2.0
+    return str(int(r)) if abs(r - round(r)) < 1e-6 else f"{r:.1f}"
 
 
 class DrivingSample(NamedTuple):
@@ -333,10 +341,21 @@ class ActionDreamingDataset(_SafeDriveSampleMixin, BaseDataset):
         codebook_path: str,
         use_mode_token: bool = True,
         world_model: Optional[Dict[str, Any]] = None,
+        speed_sentences: Optional[Dict[str, Any]] = None,
         **base_kwargs,
     ):
         BaseDataset.__init__(self, action_dreaming=True, **base_kwargs)
         self._init_safedrive(codebook_path, use_mode_token, world_model)
+        # [29] (E19a): with probability p, a speed instruction (target_speed / faster / slower) is rephrased
+        # with a natural-language template ({v} = its target speed) in the evaluation prompt format
+        # "Command: <sentence>. Predict the actions."; label unchanged (safe: the dreamed trajectory,
+        # unsafe: the expert's + FALLBACK). Off by default.
+        self.speed_templates: List[str] = []
+        self.p_speed = 0.0
+        if speed_sentences:
+            with open(speed_sentences["path"], "r") as f:
+                self.speed_templates = list(ujson.load(f)["templates"])
+            self.p_speed = float(speed_sentences.get("p", 0.0))
 
     def __getitem__(self, index: int) -> DrivingSample:
         cv2.setNumThreads(0)
@@ -352,11 +371,19 @@ class ActionDreamingDataset(_SafeDriveSampleMixin, BaseDataset):
         option = random.choice(options)
         instruction = random.choice(option["dreamer_instruction"])
 
-        navigation_prompts = self.navigation_prompts(current, target_point)
-        if random.random() < 0.8:
-            prompt = f"Current speed: {round(speed, 1)} m/s. {random.choice(navigation_prompts)} {instruction}"
+        command_style = option.get("prompt_style") == "command"   # [28] red-light dreams (build_red_dreams.py)
+        rephrased = self._rephrase_speed(option)
+        if rephrased is not None:
+            instruction, command_style = rephrased, True
+        if command_style:
+            # evaluation prompt format (agent): "Current speed: v m/s. Command: <instruction>. Predict the actions."
+            prompt = f"Current speed: {round(speed, 1)} m/s. Command: {instruction.rstrip('. ')}. {TASK_PROMPT}"
         else:
-            prompt = f"Current speed: {round(speed, 1)} m/s. {instruction}"
+            navigation_prompts = self.navigation_prompts(current, target_point)
+            if random.random() < 0.8:
+                prompt = f"Current speed: {round(speed, 1)} m/s. {random.choice(navigation_prompts)} {instruction}"
+            else:
+                prompt = f"Current speed: {round(speed, 1)} m/s. {instruction}"
         prompt = prompt.replace("..", ".").replace("  ", " ").replace("!.", "!").replace("?.", "?")
         image = self.load_image(index)
 
@@ -381,6 +408,18 @@ class ActionDreamingDataset(_SafeDriveSampleMixin, BaseDataset):
             meta_command=meta_command,
             mode=mode,
         )
+
+    def _rephrase_speed(self, option: dict) -> Optional[str]:
+        """[29]: a natural-language speed sentence for a speed dream (None: keep SimLingo's instruction)."""
+        if not self.speed_templates or self.p_speed <= 0.0 or random.random() >= self.p_speed:
+            return None
+        if str(option.get("mode", "")) not in SPEED_REPHRASE_CATEGORIES:
+            return None
+        info = option.get("info", {}) or {}
+        target = info.get("target_speed", info.get("final_speed"))
+        if target is None:
+            return None
+        return random.choice(self.speed_templates).format(v=format_speed(float(target)))
 
     @staticmethod
     def _dream_label(option: dict, current: dict, waypoints: np.ndarray, safe: bool) -> Tuple[int, Optional[str]]:

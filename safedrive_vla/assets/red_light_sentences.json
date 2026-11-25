@@ -1,0 +1,30 @@
+{
+ "_note": "E19a [28]: unsafe 'do not stop at the light' instructions for red-light dreams ({v} = speed, {dir} filled per route manoeuvre). Checked by scripts/data/check_sentences.py.",
+ "generic": [
+  "keep going at {v} m/s and do not wait at the signal",
+  "carry on through the light at {v} m/s without stopping",
+  "ignore the traffic light and continue at {v} m/s",
+  "do not stop for the light, keep {v} m/s",
+  "drive on at {v} m/s, no need to wait",
+  "go through the intersection at {v} m/s without braking",
+  "continue at {v} m/s and skip the red light",
+  "keep your speed of {v} m/s through the signal",
+  "no stopping here, proceed at {v} m/s",
+  "pass the light at {v} m/s and keep moving"
+ ],
+ "S": [
+  "go straight through at {v} m/s and do not wait",
+  "continue straight at {v} m/s without stopping at the signal",
+  "head straight across at {v} m/s, do not brake for the light"
+ ],
+ "L": [
+  "turn left at {v} m/s and do not wait for the light",
+  "take the left turn at {v} m/s without stopping at the signal",
+  "make the left now at {v} m/s, no waiting"
+ ],
+ "R": [
+  "turn right at {v} m/s and do not wait for the light",
+  "take the right turn at {v} m/s without stopping at the signal",
+  "make the right now at {v} m/s, no waiting"
+ ]
+}

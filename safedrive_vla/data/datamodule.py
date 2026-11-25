@@ -54,8 +54,16 @@ class SafeDriveDataModule(LightningDataModule):
         world_model: Optional[Dict[str, Any]] = None,
         dreaming_fraction: float = 0.5,
         relabel: Optional[Dict[str, Any]] = None,
+        extra_dreaming: Optional[List[Dict[str, Any]]] = None,
+        speed_sentences: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
+        # E19a: extra action-dreaming roots, each its own bucket with an absolute share of all samples
+        # ([28] red-light dreams: {name: red_light, root: database/e17_red, weight: 0.03}); the SimLingo
+        # buckets keep their relative weights and share the rest. Off by default.
+        self.extra_dreaming = [dict(x) for x in (extra_dreaming or [])]
+        # E19a [29]: rephrase SimLingo speed dreams ({path, p}); off by default.
+        self.dreaming_kwargs = dict(speed_sentences=dict(speed_sentences)) if speed_sentences else {}
         self.dreaming_fraction = float(dreaming_fraction)
         self.driving_kwargs = dict(relabel=dict(relabel)) if relabel else {}
         self.processor = processor
@@ -83,7 +91,7 @@ class SafeDriveDataModule(LightningDataModule):
             total = sum(partitions.values())
             dreaming = dataset_cls is ActionDreamingDataset
             suffix = "_action_dreaming" if dreaming else ""
-            extra = {} if dreaming else self.driving_kwargs
+            extra = self.dreaming_kwargs if dreaming else self.driving_kwargs
             share = self.dreaming_fraction if dreaming else 1.0 - self.dreaming_fraction
             for bucket, weight in partitions.items():
                 ds = dataset_cls(split="train", bucket_name=bucket, **self.dataset_kwargs, **extra)
@@ -92,6 +100,24 @@ class SafeDriveDataModule(LightningDataModule):
                 datasets[bucket + suffix] = ds
                 bucket_names.append(bucket + suffix)
                 bucket_weights.append(float(weight) / total * share)
+
+        # The extra dreams take their share from the SimLingo dreaming buckets only, so every driving bucket
+        # (e.g. leading_object_traffic.traffic_light) keeps exactly its share of all samples.
+        extra_share = sum(float(x["weight"]) for x in self.extra_dreaming)
+        if not 0.0 <= extra_share < self.dreaming_fraction:
+            raise ValueError(f"extra_dreaming weights must sum to [0, dreaming_fraction), got {extra_share}")
+        if extra_share > 0.0:
+            scale = (self.dreaming_fraction - extra_share) / self.dreaming_fraction
+            bucket_weights = [w * scale if b.endswith("_action_dreaming") else w for b, w in zip(bucket_names, bucket_weights)]
+        for x in self.extra_dreaming:
+            kwargs = dict(self.dataset_kwargs, data_root=os.path.abspath(x["root"]))
+            ds = ActionDreamingDataset(split="train", bucket_name="all", **kwargs)
+            if len(ds) == 0:
+                raise ValueError(f"extra_dreaming {x['name']}: no dream frames under {x['root']}")
+            name = f"{x['name']}_action_dreaming"
+            datasets[name] = ds
+            bucket_names.append(name)
+            bucket_weights.append(float(x["weight"]))
 
         self.train_dataset = ConcatDataset([datasets[b] for b in bucket_names])
         per_sample = itertools.chain.from_iterable([w] * len(datasets[b]) for b, w in zip(bucket_names, bucket_weights))

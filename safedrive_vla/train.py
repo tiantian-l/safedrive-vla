@@ -74,6 +74,8 @@ def main(cfg: TrainConfig) -> None:
         world_model=OmegaConf.to_container(cfg.model.world_model, resolve=True) if cfg.model.world_model is not None else None,
         dreaming_fraction=cfg.data.dreaming_fraction,
         relabel=OmegaConf.to_container(cfg.data.relabel, resolve=True) if cfg.data.get("relabel") else None,
+        extra_dreaming=OmegaConf.to_container(cfg.data.extra_dreaming, resolve=True) if cfg.data.get("extra_dreaming") else None,
+        speed_sentences=OmegaConf.to_container(cfg.data.speed_sentences, resolve=True) if cfg.data.get("speed_sentences") else None,
     )
     model = hydra.utils.instantiate(cfg.model, processor=processor, _recursive_=False)
     if cfg.resume_path:
