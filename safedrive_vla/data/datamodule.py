@@ -13,7 +13,7 @@ from PIL import Image
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import ConcatDataset, DataLoader, WeightedRandomSampler
 
-from safedrive_vla.constants import world_block_text
+from safedrive_vla.constants import WORLD_BEGIN_TOKEN, WORLD_END_TOKEN, world_block_text
 from safedrive_vla.data.dataset import ActionDreamingDataset, DrivingDataset, DrivingSample
 
 IGNORE_INDEX = -100
@@ -31,6 +31,23 @@ class TrainingBatch(NamedTuple):
     wm_tubelet: Optional[torch.Tensor] = None   # [B, 2, 3, H, W] uint8
     wm_state: Optional[torch.Tensor] = None     # [B, 4]
     wm_actions: Optional[torch.Tensor] = None   # [B, K, 3]
+
+
+def mask_world_blocks(input_ids: torch.Tensor, attention_mask: torch.Tensor, dropped: List[bool],
+                      begin_id: int, end_id: int) -> torch.Tensor:
+    """E19b anchor dropout 'mask': attention mask with the world block <world_begin> ... <world_end> of the dropped
+    rows set to 0, so nothing after it can attend to the dream ("no dream this time"). Position ids are unaffected:
+    the training forward passes none, and Qwen2 then uses arange (checked: transformers 5.5.3 modeling_qwen2)."""
+    out = attention_mask.clone()
+    for b, drop in enumerate(dropped):
+        if not drop:
+            continue
+        i0 = (input_ids[b] == begin_id).nonzero(as_tuple=False).flatten()
+        i1 = (input_ids[b] == end_id).nonzero(as_tuple=False).flatten()
+        if i0.numel() != 1 or i1.numel() != 1 or int(i1[0]) <= int(i0[0]):
+            raise RuntimeError("wm_dropped sample without exactly one world block")
+        out[b, int(i0[0]): int(i1[0]) + 1] = 0
+    return out
 
 
 class SafeDriveDataModule(LightningDataModule):
@@ -56,8 +73,13 @@ class SafeDriveDataModule(LightningDataModule):
         relabel: Optional[Dict[str, Any]] = None,
         extra_dreaming: Optional[List[Dict[str, Any]]] = None,
         speed_sentences: Optional[Dict[str, Any]] = None,
+        e17: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
+        # E19b: E17 paired junction frames with anchor dropout (safedrive_vla/data/e17.py): {root, index, weight,
+        # sentences, p_comp, anchor_m, dropout: {mode: none | mask | follow, p}}. Its weight is an absolute share of
+        # all samples; every other bucket (driving and dreaming) is scaled by (1 - weight). Off by default.
+        self.e17 = dict(e17) if e17 else None
         # E19a: extra action-dreaming roots, each its own bucket with an absolute share of all samples
         # ([28] red-light dreams: {name: red_light, root: database/e17_red, weight: 0.03}); the SimLingo
         # buckets keep their relative weights and share the rest. Off by default.
@@ -119,6 +141,22 @@ class SafeDriveDataModule(LightningDataModule):
             bucket_names.append(name)
             bucket_weights.append(float(x["weight"]))
 
+        if self.e17 and float(self.e17.get("weight", 0.0)) > 0.0:
+            from safedrive_vla.data.e17 import E17JunctionDataset
+            w = float(self.e17["weight"])
+            if not 0.0 < w < 1.0:
+                raise ValueError(f"e17 weight must be in (0, 1), got {w}")
+            kw = {k: v for k, v in self.e17.items() if k != "weight"}
+            ds = E17JunctionDataset(split="train", codebook_path=self.dataset_kwargs["codebook_path"],
+                                    lmdrive_templates=LMDRIVE_TEMPLATES, use_mode_token=self.dataset_kwargs["use_mode_token"],
+                                    world_model=self.world_model, **kw)
+            if len(ds) == 0:
+                raise ValueError(f"e17: no window frames under {self.e17.get('root')}")
+            bucket_weights = [x * (1.0 - w) for x in bucket_weights]
+            datasets["e17"] = ds
+            bucket_names.append("e17")
+            bucket_weights.append(w)
+
         self.train_dataset = ConcatDataset([datasets[b] for b in bucket_names])
         per_sample = itertools.chain.from_iterable([w] * len(datasets[b]) for b, w in zip(bucket_names, bucket_weights))
         num_samples = int(min(len(datasets[b]) / max(w, 1e-9) for b, w in zip(bucket_names, bucket_weights)))
@@ -171,6 +209,13 @@ class SafeDriveDataModule(LightningDataModule):
             if not bool(((labels[b] >= self.action_ids[0]) & (labels[b] < self.action_ids[1])).any()):
                 raise RuntimeError("Sample truncated before its action tokens; increase MAX_LENGTH.")
 
+        attention_mask = full["attention_mask"]
+        dropped = [bool(getattr(s, "wm_dropped", False)) for s in samples]
+        if any(dropped):
+            attention_mask = mask_world_blocks(input_ids, attention_mask, dropped,
+                                               self.tokenizer.convert_tokens_to_ids(WORLD_BEGIN_TOKEN),
+                                               self.tokenizer.convert_tokens_to_ids(WORLD_END_TOKEN))
+
         wm = {}
         if self.wm_enabled:
             wm = dict(
@@ -180,7 +225,7 @@ class SafeDriveDataModule(LightningDataModule):
             )
         return TrainingBatch(
             input_ids=input_ids,
-            attention_mask=full["attention_mask"],
+            attention_mask=attention_mask,
             labels=labels,
             pixel_values=full["pixel_values"],
             target_points=torch.tensor(np.stack([s.target_points for s in samples]), dtype=torch.float32),

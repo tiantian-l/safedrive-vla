@@ -79,6 +79,7 @@ class DrivingSample(NamedTuple):
     wm_state: Optional[np.ndarray] = None     # [4] speed, a_long, a_lat, yaw rate
     wm_actions: Optional[np.ndarray] = None   # [K, 3] (dx, dy, dyaw) per 0.5 s step
     measurement_path: str = ""
+    wm_dropped: bool = False             # E19b: world block removed from attention (collate), see data/e17.py
 
 
 def _wrap_pi(angle: float) -> float:

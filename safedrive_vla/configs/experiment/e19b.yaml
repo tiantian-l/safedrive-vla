@@ -1,0 +1,46 @@
+# @package _global_
+#
+# E19b (11/25, tia + discussion conversation; claude/ideas_2026-11-25_additions.md "E19b 方案"): pilot fine-tune of
+# the released SafeDriveVLA with the E17 paired junction frames and world-model anchor dropout ([27] option B),
+# so that the sentence becomes the input that tells left / straight / right apart at a junction.
+#   E17 window frames (scripts/data/build_e17_index.py: <= 10 m before the entry + inside the junction until the
+#   heading changed 30 deg; train split only, held-out junctions and all old towns never trained on), 20% of all
+#   samples; every other bucket (SimLingo driving 50/50 with dreaming, as released) scaled by 0.8.
+#   Dropout p 0.5 per E17 sample: mode "mask" (world block removed from attention) or "follow" (follow-the-road dream).
+# Pilot: 300 optimizer steps (4 GPUs x 12 x accumulate 2 = 96 / step, ~29k samples), lr 3e-5 (released recipe's peak,
+# linear warm-up 5% then linear decay), checkpoint every 150 steps. Same seed for both pilots.
+#   mask:   train_vla.sbatch e19b
+#   follow: train_vla.sbatch e19b name=e19b_follow data.e17.dropout.mode=follow
+#   lr 1e-5 variant: ... name=e19b_mask_lr1e-5 model.lr=1e-5
+# Prerequisite: scripts/data/build_e17_index.py --root database/e17_pairs
+# After training: scripts/tools/merge_ft_ckpt.py -> model.ckpt; probes: scripts/diag/e19b_probe.py, scripts/diag/probe.py.
+
+defaults:
+  - safedrive_vla
+  - _self_
+
+name: e19b_mask
+gpus: 4
+strategy: ddp
+max_steps: 300
+save_every_n_steps: 150
+accumulate_grad_batches: 2
+limit_val_batches: 50
+
+model:
+  lr: 3e-5
+  init_ckpt: ckpts/safedrive-vla/safedrive_vla/model.ckpt
+  freeze_vision: true
+
+data:
+  dreaming_fraction: 0.5
+  e17:
+    root: database/e17_pairs
+    index: database/e17_pairs/e17_index.json
+    sentences: safedrive_vla/assets/relabel_sentences.json
+    weight: 0.2
+    p_comp: 0.8
+    anchor_m: 15.0
+    dropout:
+      mode: mask
+      p: 0.5
