@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from hydra.core.config_store import ConfigStore
 
@@ -84,6 +84,8 @@ class DataConfig:
     train_partitions_action_dreaming: Dict[str, float] = field(default_factory=lambda: {"all": 1.0})
     dreaming_fraction: float = 0.5                 # share of action-dreaming samples (paper: 50/50)
     relabel: Optional[Dict[str, Any]] = None       # junction relabelling, see safedrive_vla/data/relabel.py
+    extra_dreaming: Optional[List[Dict[str, Any]]] = None  # E19a [28]: extra dreaming roots, own buckets (datamodule.py)
+    speed_sentences: Optional[Dict[str, Any]] = None       # E19a [29]: {path, p} rephrased speed dreams (dataset.py)
 
 
 @dataclass
