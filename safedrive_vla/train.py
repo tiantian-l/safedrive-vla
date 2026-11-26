@@ -51,6 +51,9 @@ def main(cfg: TrainConfig) -> None:
     if cfg.data.get("relabel"):
         for key in ("index", "sentences"):
             cfg.data.relabel[key] = abspath(cfg.data.relabel[key])
+    if cfg.data.get("e17"):
+        for key in ("root", "index", "sentences"):
+            cfg.data.e17[key] = abspath(cfg.data.e17[key])
     cfg.model.action_token.codebook_path = abspath(cfg.model.action_token.codebook_path)
     if cfg.model.world_model is not None:
         for key in ("encoder_ckpt", "predictor_ckpt", "action_anchor_path"):
@@ -76,6 +79,7 @@ def main(cfg: TrainConfig) -> None:
         relabel=OmegaConf.to_container(cfg.data.relabel, resolve=True) if cfg.data.get("relabel") else None,
         extra_dreaming=OmegaConf.to_container(cfg.data.extra_dreaming, resolve=True) if cfg.data.get("extra_dreaming") else None,
         speed_sentences=OmegaConf.to_container(cfg.data.speed_sentences, resolve=True) if cfg.data.get("speed_sentences") else None,
+        e17=OmegaConf.to_container(cfg.data.e17, resolve=True) if cfg.data.get("e17") else None,
     )
     model = hydra.utils.instantiate(cfg.model, processor=processor, _recursive_=False)
     if cfg.resume_path:

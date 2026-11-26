@@ -86,6 +86,7 @@ class DataConfig:
     relabel: Optional[Dict[str, Any]] = None       # junction relabelling, see safedrive_vla/data/relabel.py
     extra_dreaming: Optional[List[Dict[str, Any]]] = None  # E19a [28]: extra dreaming roots, own buckets (datamodule.py)
     speed_sentences: Optional[Dict[str, Any]] = None       # E19a [29]: {path, p} rephrased speed dreams (dataset.py)
+    e17: Optional[Dict[str, Any]] = None                    # E19b: E17 junction frames + anchor dropout (data/e17.py)
 
 
 @dataclass
