@@ -18,9 +18,10 @@ standstill (< 0.5 m/s) and slow (2-5 m/s) frames, follow-road anchor, CARLA-F st
 speed (last 0.25 s of the 2.5 s trajectory) vs X: the [29] baseline (E2: the model ignores the number).
 
     $PY scripts/diag/red_probe.py red   --root database/e17_red   --ckpt <model.ckpt> --out work_dirs/e19a_probe/red_orig.json
+    $PY scripts/diag/red_probe.py expert --root database/e17_red --out work_dirs/e19a_probe/red_orig.json   (CPU)
     $PY scripts/diag/red_probe.py speed --root database/e17_pairs --ckpt <model.ckpt> --out work_dirs/e19a_probe/speed_orig.json
 """
-import argparse, collections, gzip, json, math, os, random, sys, time
+import argparse, collections, glob, gzip, json, math, os, random, sys, time
 from pathlib import Path
 
 import numpy as np
@@ -234,6 +235,42 @@ def speed_summary(records):
     return "\n".join(L)
 
 
+def part_expert(a):
+    """CPU: the expert's own speed 0.5-1.0 s ahead (frames +2..+4, 4 Hz) on the red-probe frames, next to the
+    model's desired speed under the plain instruction -> does the model brake as early as the expert?"""
+    R = json.load(open(a.out))
+    by_route = {}
+    for rd in glob.glob(f"{os.path.abspath(REPO / a.root)}/data/simlingo/*/*/*/Town*"):
+        by_route[os.path.basename(rd)] = rd
+    rows = []
+    for r in R:
+        rd = by_route.get(r["route"])
+        if rd is None or "normal" not in r["out"]:
+            continue
+        sp = []
+        for j in (2, 3, 4):
+            f = Path(rd, "measurements", f"{r['frame'] + j:04d}.json.gz")
+            if not f.exists():
+                break
+            with gzip.open(f, "rt") as fh:
+                sp.append(json.load(fh)["speed"])
+        if len(sp) == 3:
+            rows.append((r["kind"], r["speed"], float(np.mean(sp)), r["out"]["normal"]["desired"], r["out"]["normal"]["mode"]))
+    L = ["Red-probe frames: current speed, expert speed 0.5-1.0 s ahead, model desired speed (plain instruction).", "",
+         "kind      cur bin    n   cur    expert  model   model>expert+1   model FALLBACK"]
+    for kind in ("approach", "wait", "green"):
+        for lo, hi in ((0.0, 3.0), (3.0, 6.0), (6.0, 8.0), (8.0, 30.0)):
+            xs = [x for x in rows if x[0] == kind and lo <= x[1] < hi]
+            if not xs:
+                continue
+            c = np.array([x[1] for x in xs]); e = np.array([x[2] for x in xs]); m = np.array([x[3] for x in xs])
+            L.append(f"{kind:9s} {lo:4.0f}-{hi:<4.0f} {len(xs):4d}  {c.mean():5.2f}  {e.mean():6.2f}  {m.mean():6.2f}   {np.mean(m > e + 1):6.2f}"
+                     f"           {np.mean([x[4] == 'FALLBACK' for x in xs]):5.2f}")
+    text = "\n".join(L)
+    print(text)
+    Path(a.out).with_name(Path(a.out).stem + "_expert.txt").write_text(text + "\n")
+
+
 def save(a, records, text):
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -244,7 +281,7 @@ def save(a, records, text):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("part", choices=["red", "speed"])
+    ap.add_argument("part", choices=["red", "speed", "expert"])
     ap.add_argument("--root", required=True)
     ap.add_argument("--ckpt", default="ckpts/safedrive-vla/safedrive_vla/model.ckpt")
     ap.add_argument("--out", required=True)
@@ -253,7 +290,7 @@ def main():
     ap.add_argument("--n-wait", type=int, default=2)
     ap.add_argument("--n-green", type=int, default=1)
     a = ap.parse_args()
-    {"red": part_red, "speed": part_speed}[a.part](a)
+    {"red": part_red, "speed": part_speed, "expert": part_expert}[a.part](a)
 
 
 if __name__ == "__main__":
