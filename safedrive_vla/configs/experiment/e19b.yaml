@@ -7,11 +7,12 @@
 #   heading changed 30 deg; train split only, held-out junctions and all old towns never trained on), 20% of all
 #   samples; every other bucket (SimLingo driving 50/50 with dreaming, as released) scaled by 0.8.
 #   Dropout p 0.5 per E17 sample: mode "mask" (world block removed from attention) or "follow" (follow-the-road dream).
-# Pilot: 300 optimizer steps (4 GPUs x 12 x accumulate 2 = 96 / step, ~29k samples), lr 3e-5 (released recipe's peak,
-# linear warm-up 5% then linear decay), checkpoint every 150 steps. Same seed for both pilots.
-#   mask:   train_vla.sbatch e19b
-#   follow: train_vla.sbatch e19b name=e19b_follow data.e17.dropout.mode=follow
-#   lr 1e-5 variant: ... name=e19b_mask_lr1e-5 model.lr=1e-5
+# Pilot (tia 11/26): mask only, 800 optimizer steps (4 GPUs x 12 x accumulate 2 = 96 / step, ~77k samples, ~15k E17),
+# lr 3e-5 (released recipe's peak, linear warm-up 5% then linear decay), checkpoints at 200 / 400 / 800 steps to see
+# whether the effect grows. 300 steps would train less than E14 (lr x steps), so a null result there would not tell
+# "method fails" from "too little training".
+#   train_vla.sbatch e19b
+#   ('follow' dropout is still in the code but not used: tia 11/26 dropped it - the follow dream contradicts turn labels.)
 # Prerequisite: scripts/data/build_e17_index.py --root database/e17_pairs
 # After training: scripts/tools/merge_ft_ckpt.py -> model.ckpt; probes: scripts/diag/e19b_probe.py, scripts/diag/probe.py.
 
@@ -22,8 +23,8 @@ defaults:
 name: e19b_mask
 gpus: 4
 strategy: ddp
-max_steps: 300
-save_every_n_steps: 150
+max_steps: 800
+save_every_n_steps: 200
 accumulate_grad_batches: 2
 limit_val_batches: 50
 
