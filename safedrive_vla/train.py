@@ -54,6 +54,12 @@ def main(cfg: TrainConfig) -> None:
     if cfg.data.get("e17"):
         for key in ("root", "index", "sentences"):
             cfg.data.e17[key] = abspath(cfg.data.e17[key])
+    # E19a: relative paths would resolve against Hydra's run directory (job 2273262 failed on speed_sentences.json).
+    if cfg.data.get("speed_sentences"):
+        cfg.data.speed_sentences.path = abspath(cfg.data.speed_sentences.path)
+    if cfg.data.get("extra_dreaming"):
+        for x in cfg.data.extra_dreaming:
+            x.root = abspath(x.root)
     cfg.model.action_token.codebook_path = abspath(cfg.model.action_token.codebook_path)
     if cfg.model.world_model is not None:
         for key in ("encoder_ckpt", "predictor_ckpt", "action_anchor_path"):
